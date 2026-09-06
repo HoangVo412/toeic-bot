@@ -1,0 +1,27 @@
+name: Test ket noi Google Sheets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ket-noi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth
+
+      - name: Chay test
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+        run: python test_sheet.py
