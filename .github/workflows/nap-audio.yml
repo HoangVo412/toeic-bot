@@ -1,0 +1,38 @@
+name: Nap phien am va audio
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'So tu xu ly trong lan chay nay'
+        required: false
+        default: '350'
+      delay:
+        description: 'Giay nghi giua hai lan goi API'
+        required: false
+        default: '0.25'
+
+jobs:
+  nap-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth requests
+
+      - name: Nap phien am va audio
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          DELAY: ${{ inputs.delay }}
+        run: python seed_audio.py
