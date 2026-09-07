@@ -58,6 +58,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WORKER_URL: ${{ vars.WORKER_URL }}
           BOT_SECRET: ${{ secrets.BOT_SECRET }}
-          VIEC: ${{ github.event.action || inputs.viec }}
-          THAM_SO: ${{ github.event.client_payload.word || inputs.tham_so }}
+          VIEC: ${{ github.event.action || github.event.inputs.viec }}
+          THAM_SO: ${{ github.event.client_payload.word || github.event.inputs.tham_so }}
         run: python english.py
