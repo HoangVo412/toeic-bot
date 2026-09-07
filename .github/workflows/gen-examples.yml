@@ -1,0 +1,49 @@
+name: Sinh cau vi du
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'So tu xu ly trong lan chay nay'
+        required: false
+        default: '40'
+      words_per_call:
+        description: 'So tu moi lan goi Gemini (3-12)'
+        required: false
+        default: '8'
+      max_calls:
+        description: 'So lan goi Gemini toi da'
+        required: false
+        default: '40'
+      chi_thu:
+        description: 'Chi in ra man hinh, KHONG ghi vao Sheet (1 = co)'
+        required: false
+        default: '1'
+
+jobs:
+  sinh-cau:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth requests
+
+      - name: Sinh cau vi du
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          WORDS_PER_CALL: ${{ inputs.words_per_call }}
+          MAX_CALLS: ${{ inputs.max_calls }}
+          CHI_THU: ${{ inputs.chi_thu }}
+        run: python gen_examples.py
