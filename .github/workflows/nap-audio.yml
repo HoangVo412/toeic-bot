@@ -11,6 +11,10 @@ on:
         description: 'Giay nghi giua hai lan goi API'
         required: false
         default: '0.25'
+      retry_dash:
+        description: 'Tra lai ca nhung dong dang co dau - (1 = co)'
+        required: false
+        default: '0'
 
 jobs:
   nap-audio:
@@ -33,6 +37,9 @@ jobs:
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           SHEET_ID: ${{ vars.SHEET_ID }}
+          DICT_PROXY: ${{ vars.DICT_PROXY }}
+          DICT_PROXY_SECRET: ${{ secrets.DICT_PROXY_SECRET }}
           BATCH_SIZE: ${{ inputs.batch_size }}
           DELAY: ${{ inputs.delay }}
+          RETRY_DASH: ${{ inputs.retry_dash }}
         run: python seed_audio.py
