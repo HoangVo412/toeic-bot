@@ -42,12 +42,19 @@ TRAN_TOKEN = 8192
 # LUU Y: ten model bi khai tu theo thoi gian. Neu moi ten duoi day deu hong,
 # script tu hoi API danh sach model cua tai khoan.
 MODEL_UU_TIEN = [
-    "gemini-flash-lite-latest",
-    "gemini-flash-latest",
-    "gemini-3-flash-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-3.6-flash",
+    "gemini-flash-lite-latest",      # Gemini 3.5 Flash Lite : RPD 500, RPM 15
+    "gemini-3.1-flash-lite",         # Gemini 3.1 Flash Lite : RPD 500, RPM 15
+    "gemini-3.1-flash-lite-preview", # ban preview cua tren
+    "gemini-flash-latest",           # Gemini 3.8 Flash      : RPD  20, RPM  5
+    "gemini-3-flash-preview",        # Gemini 3 Flash        : RPD  20, RPM  5
 ]
+
+# RPM (so lan goi moi PHUT) la rang buoc that su, khong phai RPD.
+# Do tren AI Studio: ban Lite cho 15 lan/phut -> toi thieu 4 giay giua hai lan
+# goi CUNG MOT model. Dung 2-3 model Lite xen ke thi thong luong nhan len.
+NHIP_TOI_THIEU = 4.2      # giay, giua hai lan goi cung mot model
+CHO_KHI_429 = 65          # giay, doi het cua so RPM roi thu lai
+SO_LAN_429_THI_DUNG = 3   # 429 lien tiep bang nay lan tren MOI model -> het RPD that
 SO_MODEL_XAC_THUC = 3        # xac thuc san bao nhieu model truoc khi chay
 DOI_MODEL_SAU = 2            # bao nhieu lan 503 lien tiep thi doi model
 QUAY_VE_SAU = 3              # bao nhieu nhom thanh cong thi quay lai model chinh
@@ -172,8 +179,11 @@ class Gemini(object):
         self.so_lan_goi = 0
         self.lan_doi_model = 0
         self.so_lan_va_json = 0
+        self.so_lan_cho_rpm = 0
         self._503_lien_tiep = 0
+        self._429_lien_tiep = 0
         self._thanh_cong_tren_du_phong = 0
+        self._lan_goi_cuoi = {}       # model -> thoi diem goi gan nhat
 
     @property
     def model(self):
@@ -266,6 +276,15 @@ class Gemini(object):
                                  "responseMimeType": "application/json"},
         }
         for lan in range(so_lan_thu):
+            # --- Dieu tiet nhip: cho du NHIP_TOI_THIEU giay ke tu lan goi truoc
+            #     cua CHINH model nay, de khong vuot RPM ---
+            truoc = self._lan_goi_cuoi.get(self.model)
+            if truoc is not None:
+                con_thieu = NHIP_TOI_THIEU - (time.time() - truoc)
+                if con_thieu > 0:
+                    time.sleep(con_thieu)
+            self._lan_goi_cuoi[self.model] = time.time()
+
             url = "%s/models/%s:generateContent?key=%s" % (BASE, self.model, self.key)
             self.so_lan_goi += 1
             try:
@@ -278,6 +297,7 @@ class Gemini(object):
 
             if r.status_code == 200:
                 self._503_lien_tiep = 0
+                self._429_lien_tiep = 0
                 try:
                     kq = r.json()
                     cand = (kq.get("candidates") or [{}])[0]
@@ -297,7 +317,20 @@ class Gemini(object):
                     return None, "JSON_HONG"
 
             if r.status_code == 429:
-                return None, "HET_HAN_MUC"       # RPD la rang buoc that
+                # 429 co HAI nguyen nhan khac han nhau:
+                #   het RPM (so lan/phut) -> chi can cho ~1 phut la chay tiep
+                #   het RPD (so lan/ngay) -> phai doi sang ngay mai
+                # Ban truoc gop chung roi dung han, bo phi hang tram luot con lai.
+                self._429_lien_tiep += 1
+                if self._429_lien_tiep >= SO_LAN_429_THI_DUNG * max(1, len(self.dung_duoc)):
+                    return None, "HET_HAN_MUC_NGAY"
+                if self._doi_model():
+                    continue                      # thu model khac ngay, no co RPM rieng
+                self.so_lan_cho_rpm += 1
+                print("      429 - co le het han muc PHUT, cho %d giay roi thu lai"
+                      % CHO_KHI_429)
+                time.sleep(CHO_KHI_429)
+                continue
 
             if r.status_code == 503:
                 self._503_lien_tiep += 1
@@ -460,8 +493,8 @@ def main():
                 loi[ly_do] = loi.get(ly_do, 0) + 1
                 print("  %s[%d-%d] that bai: %s" % (nhan, vt + 1, vt + len(nhom), ly_do))
                 chua_dat += nhom
-                if ly_do == "HET_HAN_MUC":
-                    print("  Het so lan goi trong ngay (RPD). Dung han.")
+                if ly_do == "HET_HAN_MUC_NGAY":
+                    print("  Het so lan goi trong NGAY (RPD). Dung han.")
                     chua_dat += danh_sach[vt + len(nhom):]
                     dung_han["x"] = True
                     break
@@ -562,13 +595,14 @@ def main():
     print("So lan goi Gemini     : %d" % gem.so_lan_goi)
     print("So lan doi model      : %d" % gem.lan_doi_model)
     print("So lan phai va JSON   : %d" % gem.so_lan_va_json)
+    print("So lan cho het RPM    : %d" % gem.so_lan_cho_rpm)
     print("Cau bi loai           : %d" % len(loai_bo))
     if loi:
         print("")
         print("Loi goi API:")
         for k, v in sorted(loi.items(), key=lambda x: -x[1]):
             ct = ""
-            if k == "HET_HAN_MUC":
+            if k == "HET_HAN_MUC_NGAY":
                 ct = "  <- het so lan/ngay, doi sang mai"
             elif k == "QUA_TAI_503":
                 ct = "  <- Gemini qua tai, khong phai loi han muc"
