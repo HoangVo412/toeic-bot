@@ -33,15 +33,19 @@ SO_CAU = 4
 TRAN_TOKEN = 8192
 
 # Xep xen ke cac DONG khac nhau, de khi mot dong nghen thi nhay sang dong khac.
+# LUU Y: ten model bi khai tu theo thoi gian. Log ngay 07/09/2026 cho thay
+# gemini-2.0-flash / 2.5-flash / 2.5-flash-lite deu da tra 404.
+# Neu moi ten duoi day deu hong, script tu hoi API danh sach model cua tai khoan.
 MODEL_UU_TIEN = [
     "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
     "gemini-flash-lite-latest",
-    "gemini-2.0-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
 ]
 SO_MODEL_XAC_THUC = 3        # xac thuc san bao nhieu model truoc khi chay
 DOI_MODEL_SAU = 2            # bao nhieu lan 503 lien tiep thi doi model
+QUAY_VE_SAU = 3              # bao nhieu nhom thanh cong thi quay lai model chinh
 
 
 def die(ly_do, huong_xu_ly=""):
@@ -58,9 +62,20 @@ def die(ly_do, huong_xu_ly=""):
 def bien_the(w):
     """Sinh co hoc cac dang thuong gap cua mot tu, de kiem cau co chua no khong."""
     w = w.lower().strip()
+    if not w:
+        return {w}
+
+    # Tu dang "according (to)": chap nhan ca "according to" lan "according"
+    if "(" in w:
+        day_du = re.sub(r"[()]", "", w)
+        day_du = re.sub(r"\s+", " ", day_du).strip()
+        rut_gon = re.sub(r"\s*\([^)]*\)", "", w).strip()
+        ds = {x for x in (day_du, rut_gon) if x}
+        return ds
+
     ds = {w}
-    if not w or " " in w or "(" in w:
-        return ds                      # cum tu: kiem nguyen cum
+    if " " in w:
+        return ds                      # cum tu nhieu chu: kiem nguyen cum
     ds |= {w + "s", w + "es", w + "d", w + "ed", w + "ing"}
     if w.endswith("e"):
         ds |= {w[:-1] + "ing", w[:-1] + "ed", w[:-1] + "es"}
@@ -84,6 +99,63 @@ def co_dau_tieng_viet(s):
                for c in unicodedata.normalize("NFD", s)) or "đ" in s.lower()
 
 
+def doc_json(txt):
+    """Doc JSON. Neu bi cat giua chung thi van vot lay cac muc HOAN CHINH.
+    Tra ve (du_lieu, da_va) - da_va = True nghia la ban goc hong nhung cuu duoc.
+    """
+    try:
+        return json.loads(txt), False
+    except Exception:
+        pass
+
+    # Quet thu cong: lay tung object can bang ngoac trong mang "ket_qua"
+    vt = txt.find('"ket_qua"')
+    if vt < 0:
+        return None, False
+    vt = txt.find("[", vt)
+    if vt < 0:
+        return None, False
+
+    muc = []
+    i = vt + 1
+    n = len(txt)
+    while i < n:
+        while i < n and txt[i] not in "{]":
+            i += 1
+        if i >= n or txt[i] == "]":
+            break
+        dau = i
+        sau = 0
+        trong_chuoi = False
+        thoat = False
+        while i < n:
+            c = txt[i]
+            if thoat:
+                thoat = False
+            elif c == "\\":
+                thoat = True
+            elif c == '"':
+                trong_chuoi = not trong_chuoi
+            elif not trong_chuoi:
+                if c == "{":
+                    sau += 1
+                elif c == "}":
+                    sau -= 1
+                    if sau == 0:
+                        i += 1
+                        break
+            i += 1
+        if sau != 0:
+            break                      # object cuoi bi cat, bo
+        try:
+            muc.append(json.loads(txt[dau:i]))
+        except Exception:
+            pass
+    if not muc:
+        return None, False
+    return {"ket_qua": muc}, True
+
+
 # ---------------------------------------------------------------- Gemini
 class Gemini(object):
     def __init__(self, key):
@@ -94,7 +166,9 @@ class Gemini(object):
         self.vi_tri = 0           # dang dung model nao trong danh sach
         self.so_lan_goi = 0
         self.lan_doi_model = 0
+        self.so_lan_va_json = 0
         self._503_lien_tiep = 0
+        self._thanh_cong_tren_du_phong = 0
 
     @property
     def model(self):
@@ -168,6 +242,18 @@ class Gemini(object):
         print("      -> chuyen sang model %s" % self.model)
         return True
 
+    def bao_thanh_cong(self):
+        """Goi sau moi nhom lam duoc. Neu dang chay model du phong va da on
+        dinh mot luc thi quay ve model chinh - tranh bam mai vao model yeu."""
+        if self.vi_tri == 0:
+            return
+        self._thanh_cong_tren_du_phong += 1
+        if self._thanh_cong_tren_du_phong >= QUAY_VE_SAU:
+            self.vi_tri = 0
+            self._thanh_cong_tren_du_phong = 0
+            self._503_lien_tiep = 0
+            print("      -> quay lai model chinh %s" % self.model)
+
     def sinh(self, prompt, so_lan_thu=3):
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -199,6 +285,10 @@ class Gemini(object):
                 try:
                     return json.loads(txt), ""
                 except Exception:
+                    du_lieu, da_va = doc_json(txt)
+                    if du_lieu is not None:
+                        self.so_lan_va_json += 1
+                        return du_lieu, "VA_JSON"
                     return None, "JSON_HONG"
 
             if r.status_code == 429:
@@ -339,57 +429,86 @@ def main():
     loi = {}
     bat_dau = time.time()
 
-    for vt in range(0, len(dot), moi_lan):
-        if gem.so_lan_goi >= tran_goi:
-            print("Cham tran %d lan goi. Dung lai." % tran_goi)
-            break
-        nhom = dot[vt:vt + moi_lan]
-        du_lieu, ly_do = gem.sinh(dung_prompt([(w, p, n) for _, w, p, n in nhom]))
-
-        if du_lieu is None:
-            loi[ly_do] = loi.get(ly_do, 0) + 1
-            print("  [%d-%d] that bai: %s" % (vt + 1, vt + len(nhom), ly_do))
-            if ly_do == "HET_HAN_MUC":
-                print("  Het so lan goi trong ngay (RPD). Dung han.")
+    def chay_mot_dot(danh_sach, so_tu_moi_lan, nhan):
+        """Chay het mot danh sach tu. Tra ve list cac tu CHUA dat."""
+        chua_dat = []
+        for vt in range(0, len(danh_sach), so_tu_moi_lan):
+            if gem.so_lan_goi >= tran_goi:
+                print("  Cham tran %d lan goi. Dung lai." % tran_goi)
+                chua_dat += danh_sach[vt:]
                 break
-            if ly_do == "BI_CAT_MAX_TOKENS":
-                print("  Giam WORDS_PER_CALL xuong roi chay lai.")
-            continue
+            nhom = danh_sach[vt:vt + so_tu_moi_lan]
+            du_lieu, ly_do = gem.sinh(dung_prompt([(w, p, n) for _, w, p, n in nhom]))
 
-        theo_tu = {}
-        for muc in (du_lieu.get("ket_qua") or []):
-            if isinstance(muc, dict) and muc.get("word"):
-                theo_tu[str(muc["word"]).lower().strip()] = muc.get("cau") or []
-
-        dat = 0
-        for dong, word, pos, nghia in nhom:
-            cau_ds = theo_tu.get(word.lower().strip(), [])
-            hop_le = []
-            for c in cau_ds:
-                if not isinstance(c, dict):
-                    continue
-                en = (c.get("en") or "").strip()
-                vi = (c.get("vi") or "").strip()
-                if not en or not vi:
-                    continue
-                if not cau_co_chua(en, word):
-                    loai_bo.append((word, "cau khong chua tu", en[:58]))
-                    continue
-                if not co_dau_tieng_viet(vi):
-                    loai_bo.append((word, "ban dich khong phai tieng Viet", vi[:58]))
-                    continue
-                hop_le.append((en, vi))
-                if len(hop_le) == SO_CAU:
+            if du_lieu is None:
+                loi[ly_do] = loi.get(ly_do, 0) + 1
+                print("  %s[%d-%d] that bai: %s" % (nhan, vt + 1, vt + len(nhom), ly_do))
+                chua_dat += nhom
+                if ly_do == "HET_HAN_MUC":
+                    print("  Het so lan goi trong ngay (RPD). Dung han.")
+                    chua_dat += danh_sach[vt + len(nhom):]
+                    dung_han["x"] = True
                     break
-            if len(hop_le) == SO_CAU:
-                ket_qua[dong] = hop_le
-                dat += 1
-            else:
-                loai_bo.append((word, "chi co %d/%d cau dat" % (len(hop_le), SO_CAU), ""))
+                if ly_do == "BI_CAT_MAX_TOKENS":
+                    print("  Giam WORDS_PER_CALL xuong roi chay lai.")
+                continue
 
-        print("  [%d-%d] %d/%d tu dat  |  %s  |  da goi %d lan  |  %.1f phut"
-              % (vt + 1, vt + len(nhom), dat, len(nhom), gem.model,
-                 gem.so_lan_goi, (time.time() - bat_dau) / 60))
+            if ly_do == "VA_JSON":
+                loi["VA_JSON"] = loi.get("VA_JSON", 0) + 1
+
+            theo_tu = {}
+            for muc in (du_lieu.get("ket_qua") or []):
+                if isinstance(muc, dict) and muc.get("word"):
+                    theo_tu[str(muc["word"]).lower().strip()] = muc.get("cau") or []
+
+            dat = 0
+            for dong, word, pos, nghia in nhom:
+                cau_ds = theo_tu.get(word.lower().strip(), [])
+                hop_le = []
+                for c in cau_ds:
+                    if not isinstance(c, dict):
+                        continue
+                    en = (c.get("en") or "").strip()
+                    vi = (c.get("vi") or "").strip()
+                    if not en or not vi:
+                        continue
+                    if not cau_co_chua(en, word):
+                        loai_bo.append((word, "cau khong chua tu", en[:58]))
+                        continue
+                    if not co_dau_tieng_viet(vi):
+                        loai_bo.append((word, "ban dich khong phai tieng Viet", vi[:58]))
+                        continue
+                    hop_le.append((en, vi))
+                    if len(hop_le) == SO_CAU:
+                        break
+                if len(hop_le) == SO_CAU:
+                    ket_qua[dong] = hop_le
+                    dat += 1
+                else:
+                    chua_dat.append((dong, word, pos, nghia))
+                    if not cau_ds:
+                        loai_bo.append((word, "model khong tra ve tu nay", ""))
+                    else:
+                        loai_bo.append((word, "chi co %d/%d cau dat"
+                                        % (len(hop_le), SO_CAU), ""))
+
+            if dat == len(nhom):
+                gem.bao_thanh_cong()
+            print("  %s[%d-%d] %d/%d tu dat  |  %s  |  da goi %d lan  |  %.1f phut"
+                  % (nhan, vt + 1, vt + len(nhom), dat, len(nhom), gem.model,
+                     gem.so_lan_goi, (time.time() - bat_dau) / 60))
+        return chua_dat
+
+    dung_han = {"x": False}
+    con_thieu = chay_mot_dot(dot, moi_lan, "")
+
+    # Vong 2: goi lai rieng nhung tu chua dat, nhom nho hon de model de tra du
+    if con_thieu and not dung_han["x"] and gem.so_lan_goi < tran_goi:
+        print("")
+        print("Vong 2: goi lai %d tu chua dat, nhom %d tu/lan"
+              % (len(con_thieu), max(3, moi_lan // 2)))
+        loai_bo.append(("---", "--- vong 2 bat dau ---", ""))
+        chay_mot_dot(con_thieu, max(3, moi_lan // 2), "v2 ")
 
     # ------------------------------------------------------------ xuat
     if chi_thu:
@@ -426,6 +545,7 @@ def main():
     print("Tu sinh du %d cau dat : %d / %d" % (SO_CAU, len(ket_qua), len(dot)))
     print("So lan goi Gemini     : %d" % gem.so_lan_goi)
     print("So lan doi model      : %d" % gem.lan_doi_model)
+    print("So lan phai va JSON   : %d" % gem.so_lan_va_json)
     print("Cau bi loai           : %d" % len(loai_bo))
     if loi:
         print("")
@@ -439,7 +559,9 @@ def main():
             elif k == "BI_CAT_MAX_TOKENS":
                 ct = "  <- phan hoi dai qua tran, giam WORDS_PER_CALL"
             elif k == "JSON_HONG":
-                ct = "  <- model tra ve khong dung dang JSON"
+                ct = "  <- model tra ve khong dung dang JSON, khong cuu duoc"
+            elif k == "VA_JSON":
+                ct = "  <- JSON bi cat nhung da vot duoc phan hoan chinh"
             print("   %-26s %d lan%s" % (k, v, ct))
     if loai_bo:
         print("")
