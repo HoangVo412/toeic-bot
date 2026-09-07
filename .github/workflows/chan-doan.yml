@@ -1,0 +1,78 @@
+name: Chan doan mang
+
+on:
+  workflow_dispatch:
+
+jobs:
+  chan-doan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Vi tri runner
+        run: |
+          echo "--- IP cong khai cua runner ---"
+          curl -s --max-time 10 https://api.ipify.org || echo "(khong lay duoc)"
+          echo ""
+
+      - name: Doi chung - goi mot API chac chan song
+        run: |
+          echo "--- api.github.com (doi chung) ---"
+          curl -s -o /dev/null --max-time 20 \
+            -w 'dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s first_byte=%{time_starttransfer}s http=%{http_code}\n' \
+            https://api.github.com || echo "THAT BAI: exit=$?"
+
+      - name: Phan giai ten mien dictionaryapi
+        run: |
+          echo "--- DNS ---"
+          getent hosts api.dictionaryapi.dev || echo "KHONG PHAN GIAI DUOC TEN MIEN"
+
+      - name: Goi thang dictionaryapi - HTTP/2 mac dinh
+        continue-on-error: true
+        run: |
+          echo "--- HTTP/2 mac dinh ---"
+          curl -s -o /tmp/r1.json --max-time 25 \
+            -w 'dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s first_byte=%{time_starttransfer}s http=%{http_code} bytes=%{size_download}\n' \
+            https://api.dictionaryapi.dev/api/v2/entries/en/hello
+          echo "exit=$?"
+          echo "--- 200 ky tu dau cua phan hoi ---"
+          head -c 200 /tmp/r1.json 2>/dev/null || echo "(khong co noi dung)"
+          echo ""
+
+      - name: Goi thang dictionaryapi - ep HTTP/1.1 va User-Agent that
+        continue-on-error: true
+        run: |
+          echo "--- HTTP/1.1 + User-Agent trinh duyet ---"
+          curl -s -o /tmp/r2.json --max-time 25 --http1.1 \
+            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36' \
+            -H 'Accept: application/json' \
+            -w 'dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s first_byte=%{time_starttransfer}s http=%{http_code} bytes=%{size_download}\n' \
+            https://api.dictionaryapi.dev/api/v2/entries/en/hello
+          echo "exit=$?"
+          head -c 200 /tmp/r2.json 2>/dev/null || echo "(khong co noi dung)"
+          echo ""
+
+      - name: Goi thu lan hai - xem co phai chap chon khong
+        continue-on-error: true
+        run: |
+          for w in order receipt budget; do
+            echo "--- tu: $w ---"
+            curl -s -o /dev/null --max-time 25 --http1.1 \
+              -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36' \
+              -w 'first_byte=%{time_starttransfer}s http=%{http_code}\n' \
+              "https://api.dictionaryapi.dev/api/v2/entries/en/$w"
+            echo "exit=$?"
+          done
+
+      - name: Ket luan
+        run: |
+          echo "======================================================"
+          echo "CACH DOC KET QUA"
+          echo "======================================================"
+          echo "Doi chung github OK, dictionaryapi http=200      -> API song, loi nam o script Python"
+          echo "Doi chung github OK, dictionaryapi connect=0.00  -> chan o tang ket noi"
+          echo "Doi chung github OK, connect co so, first_byte 0 -> BI CHAN IM LANG theo IP"
+          echo "Doi chung github OK, http=403 hoac 429           -> bi tu choi, khong phai treo"
+          echo "HTTP/1.1 chay duoc ma HTTP/2 treo                -> loi thuong luong HTTP/2"
+          echo "Ca hai deu that bai, github van OK               -> API down hoac chan dai IP Azure"
+          echo "======================================================"
