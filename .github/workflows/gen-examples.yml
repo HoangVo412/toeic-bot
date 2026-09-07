@@ -6,11 +6,11 @@ on:
       batch_size:
         description: 'So tu xu ly trong lan chay nay'
         required: false
-        default: '40'
+        default: '60'
       words_per_call:
-        description: 'So tu moi lan goi Gemini (3-12)'
+        description: 'So tu moi lan goi Gemini (3-10)'
         required: false
-        default: '8'
+        default: '6'
       max_calls:
         description: 'So lan goi Gemini toi da'
         required: false
@@ -23,7 +23,7 @@ on:
 jobs:
   sinh-cau:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Lay code ve
