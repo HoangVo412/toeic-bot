@@ -6,20 +6,28 @@ on:
       batch_size:
         description: 'So tu xu ly trong lan chay nay'
         required: false
-        default: '350'
-      delay:
-        description: 'Giay nghi giua hai lan goi API'
+        default: '250'
+      max_workers:
+        description: 'So luong chay song song (3-8)'
         required: false
-        default: '0.25'
+        default: '6'
+      retries:
+        description: 'So lan thu lai moi tu'
+        required: false
+        default: '2'
+      read_timeout:
+        description: 'Giay cho phan hoi (API do duoc ~19.7s)'
+        required: false
+        default: '35'
       retry_dash:
-        description: 'Tra lai ca nhung dong dang co dau - (1 = co)'
+        description: 'Tra lai ca cac dong dang co dau - (1 = co)'
         required: false
         default: '0'
 
 jobs:
   nap-audio:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Lay code ve
@@ -40,6 +48,8 @@ jobs:
           DICT_PROXY: ${{ vars.DICT_PROXY }}
           DICT_PROXY_SECRET: ${{ secrets.DICT_PROXY_SECRET }}
           BATCH_SIZE: ${{ inputs.batch_size }}
-          DELAY: ${{ inputs.delay }}
+          MAX_WORKERS: ${{ inputs.max_workers }}
+          RETRIES: ${{ inputs.retries }}
+          READ_TIMEOUT: ${{ inputs.read_timeout }}
           RETRY_DASH: ${{ inputs.retry_dash }}
         run: python seed_audio.py
