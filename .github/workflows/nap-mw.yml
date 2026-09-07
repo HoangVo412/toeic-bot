@@ -1,0 +1,54 @@
+name: Nap phien am va audio (Merriam-Webster)
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'So tu xu ly trong lan chay nay'
+        required: false
+        default: '500'
+      max_workers:
+        description: 'So luong chay song song (3-8)'
+        required: false
+        default: '5'
+      retries:
+        description: 'So lan thu lai moi tu'
+        required: false
+        default: '2'
+      read_timeout:
+        description: 'Giay cho phan hoi'
+        required: false
+        default: '20'
+      ghi_de:
+        description: 'Lay lai ca nhung dong da co du lieu (1 = co)'
+        required: false
+        default: '0'
+
+jobs:
+  nap-mw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth requests
+
+      - name: Nap tu Merriam-Webster
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          MW_KEY: ${{ secrets.MW_KEY }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          MAX_WORKERS: ${{ inputs.max_workers }}
+          RETRIES: ${{ inputs.retries }}
+          READ_TIMEOUT: ${{ inputs.read_timeout }}
+          GHI_DE: ${{ inputs.ghi_de }}
+        run: python seed_mw.py
