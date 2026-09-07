@@ -1,0 +1,63 @@
+name: Bot TOEIC
+
+on:
+  repository_dispatch:
+    types:
+      - tu_moi
+      - tu_moi_them
+      - on_tap
+      - thong_ke
+      - tra_tu
+      - toeic_de
+      - toeic_da
+      - dong_bo
+  workflow_dispatch:
+    inputs:
+      viec:
+        description: 'Viec can chay'
+        required: true
+        type: choice
+        default: dong_bo
+        options:
+          - dong_bo
+          - tu_moi
+          - on_tap
+          - thong_ke
+          - tra_tu
+      tham_so:
+        description: 'Tham so (dung cho tra_tu)'
+        required: false
+        default: ''
+
+concurrency:
+  group: bot-toeic
+  cancel-in-progress: false
+
+jobs:
+  chay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth requests
+
+      - name: Chay bot
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          BOT_SECRET: ${{ secrets.BOT_SECRET }}
+          VIEC: ${{ github.event.action || inputs.viec }}
+          THAM_SO: ${{ github.event.client_payload.word || inputs.tham_so }}
+        run: python english.py
