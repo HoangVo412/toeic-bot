@@ -2,15 +2,22 @@
 """
 Sinh 4 cau vi du + ban dich tieng Viet cho tung tu, bang Gemini.
 
-BA LOP CHAN LOI (theo dung thu tu bi sai da gap o cac bot truoc):
-  1. Prompt rang buoc nghia: dua nghia tieng Viet DA CHUAN HOA vao prompt,
-     khong de model tu chon nghia khac (vd 'plant' = cay thay vi nha may).
-  2. Tu kiem co hoc: cau phai THUC SU chua tu do (hoac bien the -s/-ed/-ing...),
-     kiem bang RANH GIOI TU. Tu nao truot thi bi loai, khong ghi vao Sheet.
-  3. Chuoi model du phong + tu do danh sach model tu API khi moi ten cung deu sai.
+BAN v2 - sua theo ket qua lan chay dau (8/40 tu dat):
+  * maxOutputTokens 4096 -> 8192. Do 8 tu moi lan can ~4400 token, tran cu bi
+    tran khien JSON bi cat giua chung, script bao "JSONDecodeError" vo nghia.
+  * WORDS_PER_CALL mac dinh 8 -> 6, de cach xa tran.
+  * Bat finishReason == MAX_TOKENS va bao dung ly do thay vi loi JSON.
+  * XOAY VONG MODEL khi gap 503. Ban truoc chon mot model roi bam mai vao no;
+    'gemini-flash-latest' la alias tro ve chinh model dang nghen nen thu lai vo ich.
+    Nay xac thuc san nhieu model va nhay sang model KHAC DONG khi bi qua tai.
+  * Giai lao dai hon giua cac lan thu 503.
+
+BA LOP CHAN LOI giu nguyen:
+  1. Prompt rang buoc nghia tieng Viet da chuan hoa o cot E.
+  2. Tu kiem co hoc: cau phai thuc su chua tu do, kiem bang ranh gioi tu.
+  3. Ban dich phai la tieng Viet co dau.
 
 Ghi vao cot H..O (VD1, Dich1 ... VD4, Dich4).
-Mac dinh chi lam nhung dong CHUA co VD1.
 """
 import os
 import re
@@ -23,14 +30,18 @@ BASE = "https://generativelanguage.googleapis.com/v1beta"
 COT_WORD, COT_POS, COT_NGHIA = 2, 3, 5      # B, C, E
 COT_VD1 = 8                                  # H
 SO_CAU = 4
+TRAN_TOKEN = 8192
 
-# Thu lan luot. Ten model thay doi theo thoi gian nen co buoc tu do o cuoi.
+# Xep xen ke cac DONG khac nhau, de khi mot dong nghen thi nhay sang dong khac.
 MODEL_UU_TIEN = [
     "gemini-flash-latest",
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
+    "gemini-2.5-flash",
     "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite",
 ]
+SO_MODEL_XAC_THUC = 3        # xac thuc san bao nhieu model truoc khi chay
+DOI_MODEL_SAU = 2            # bao nhieu lan 503 lien tiep thi doi model
 
 
 def die(ly_do, huong_xu_ly=""):
@@ -79,8 +90,15 @@ class Gemini(object):
         import requests
         self.r = requests
         self.key = key
-        self.model = None
+        self.dung_duoc = []       # danh sach model da xac thuc
+        self.vi_tri = 0           # dang dung model nao trong danh sach
         self.so_lan_goi = 0
+        self.lan_doi_model = 0
+        self._503_lien_tiep = 0
+
+    @property
+    def model(self):
+        return self.dung_duoc[self.vi_tri] if self.dung_duoc else None
 
     def _thu_model(self, ten):
         url = "%s/models/%s:generateContent?key=%s" % (BASE, ten, self.key)
@@ -93,13 +111,12 @@ class Gemini(object):
         if r.status_code == 200:
             return True, ""
         try:
-            mo_ta = r.json().get("error", {}).get("message", "")[:120]
+            mo_ta = r.json().get("error", {}).get("message", "")[:110]
         except Exception:
-            mo_ta = r.text[:120]
+            mo_ta = r.text[:110]
         return False, "HTTP %d: %s" % (r.status_code, mo_ta)
 
     def _do_danh_sach(self):
-        """Khi moi ten cung deu hong, hoi thang API xem tai khoan nay co model nao."""
         try:
             r = self.r.get("%s/models?key=%s" % (BASE, self.key), timeout=45)
             if r.status_code != 200:
@@ -115,52 +132,87 @@ class Gemini(object):
             return []
 
     def chon_model(self):
-        print("Dang chon model...")
+        print("Dang xac thuc model (can it nhat %d de co duong lui khi 503)..."
+              % SO_MODEL_XAC_THUC)
         for ten in MODEL_UU_TIEN:
+            if len(self.dung_duoc) >= SO_MODEL_XAC_THUC:
+                break
             ok, ly_do = self._thu_model(ten)
             print("   %-26s %s" % (ten, "DUNG DUOC" if ok else "khong: " + ly_do))
             if ok:
-                self.model = ten
-                return ten
-        print("   Moi ten cung deu hong. Dang hoi API danh sach model...")
-        for ten in self._do_danh_sach()[:8]:
-            ok, ly_do = self._thu_model(ten)
-            print("   %-26s %s" % (ten, "DUNG DUOC" if ok else "khong: " + ly_do))
-            if ok:
-                self.model = ten
-                return ten
-        die("Khong tim duoc model Gemini nao dung duoc.",
-            "Kiem tra GEMINI_KEY con han muc khong, va API da bat trong project chua.")
+                self.dung_duoc.append(ten)
+        if len(self.dung_duoc) < SO_MODEL_XAC_THUC:
+            print("   Chua du. Dang hoi API danh sach model cua tai khoan...")
+            for ten in self._do_danh_sach():
+                if len(self.dung_duoc) >= SO_MODEL_XAC_THUC:
+                    break
+                if ten in self.dung_duoc:
+                    continue
+                ok, ly_do = self._thu_model(ten)
+                print("   %-26s %s" % (ten, "DUNG DUOC" if ok else "khong: " + ly_do))
+                if ok:
+                    self.dung_duoc.append(ten)
+        if not self.dung_duoc:
+            die("Khong tim duoc model Gemini nao dung duoc.",
+                "Kiem tra GEMINI_KEY con han muc khong, va Generative Language API "
+                "da bat trong project chua.")
+        print("")
+        print("Model se dung : %s" % ", ".join(self.dung_duoc))
+
+    def _doi_model(self):
+        if len(self.dung_duoc) < 2:
+            return False
+        self.vi_tri = (self.vi_tri + 1) % len(self.dung_duoc)
+        self.lan_doi_model += 1
+        self._503_lien_tiep = 0
+        print("      -> chuyen sang model %s" % self.model)
+        return True
 
     def sinh(self, prompt, so_lan_thu=3):
-        url = "%s/models/%s:generateContent?key=%s" % (BASE, self.model, self.key)
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096,
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": TRAN_TOKEN,
                                  "responseMimeType": "application/json"},
         }
         for lan in range(so_lan_thu):
+            url = "%s/models/%s:generateContent?key=%s" % (BASE, self.model, self.key)
             self.so_lan_goi += 1
             try:
-                r = self.r.post(url, json=body, timeout=120)
+                r = self.r.post(url, json=body, timeout=180)
             except Exception as e:
                 if lan == so_lan_thu - 1:
                     return None, "LOI_MANG:" + type(e).__name__
                 time.sleep(5 * (lan + 1))
                 continue
+
             if r.status_code == 200:
+                self._503_lien_tiep = 0
                 try:
-                    txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    return json.loads(txt), ""
+                    kq = r.json()
+                    cand = (kq.get("candidates") or [{}])[0]
+                    ly_do_dung = cand.get("finishReason", "")
+                    if ly_do_dung == "MAX_TOKENS":
+                        return None, "BI_CAT_MAX_TOKENS"
+                    txt = cand["content"]["parts"][0]["text"]
                 except Exception as e:
-                    return None, "KHONG_DOC_DUOC_JSON:%s" % type(e).__name__
+                    return None, "KHONG_DOC_DUOC_PHAN_HOI:%s" % type(e).__name__
+                try:
+                    return json.loads(txt), ""
+                except Exception:
+                    return None, "JSON_HONG"
+
             if r.status_code == 429:
-                return None, "HET_HAN_MUC"       # RPD la rang buoc that, thu lai vo ich
+                return None, "HET_HAN_MUC"       # RPD la rang buoc that
+
             if r.status_code == 503:
+                self._503_lien_tiep += 1
+                if self._503_lien_tiep >= DOI_MODEL_SAU and self._doi_model():
+                    continue                      # thu lai ngay bang model khac
                 if lan == so_lan_thu - 1:
                     return None, "QUA_TAI_503"
-                time.sleep(8 * (lan + 1))
+                time.sleep(10 * (lan + 1))
                 continue
+
             return None, "HTTP:%d" % r.status_code
         return None, "HET_LAN_THU"
 
@@ -208,8 +260,8 @@ def main():
         except ValueError:
             return float(mac_dinh)
 
-    lo = int(so("BATCH_SIZE", 40))
-    moi_lan = max(3, min(12, int(so("WORDS_PER_CALL", 8))))
+    lo = int(so("BATCH_SIZE", 60))
+    moi_lan = max(3, min(10, int(so("WORDS_PER_CALL", 6))))
     tran_goi = int(so("MAX_CALLS", 40))
     chi_thu = (os.environ.get("CHI_THU") or "").strip().lower() in ("1", "true", "yes")
 
@@ -220,8 +272,10 @@ def main():
     print("GOOGLE_SA_JSON  : " + ("co, %d ky tu" % len(sa_raw) if sa_raw else "(TRONG)"))
     print("GEMINI_KEY      : " + ("co, %d ky tu" % len(gem_key) if gem_key else "(TRONG)"))
     print("BATCH_SIZE      : %d tu" % lo)
-    print("WORDS_PER_CALL  : %d tu moi lan goi Gemini" % moi_lan)
+    print("WORDS_PER_CALL  : %d tu moi lan goi" % moi_lan)
     print("MAX_CALLS       : %d lan goi toi da" % tran_goi)
+    print("maxOutputTokens : %d  (uoc tinh can ~%d cho %d tu)"
+          % (TRAN_TOKEN, int(moi_lan * 340 * 1.6), moi_lan))
     print("CHI_THU         : " + ("BAT - IN RA MAN HINH, KHONG GHI VAO SHEET"
                                   if chi_thu else "tat - se ghi vao Sheet"))
     print("")
@@ -275,8 +329,10 @@ def main():
 
     gem = Gemini(gem_key)
     gem.chon_model()
-    print("Model dang dung : %s" % gem.model)
     print("")
+
+    ten_theo_dong = {d: w for d, w, _, _ in dot}
+    nghia_theo_dong = {d: n for d, _, _, n in dot}
 
     ket_qua = {}
     loai_bo = []
@@ -294,8 +350,10 @@ def main():
             loi[ly_do] = loi.get(ly_do, 0) + 1
             print("  [%d-%d] that bai: %s" % (vt + 1, vt + len(nhom), ly_do))
             if ly_do == "HET_HAN_MUC":
-                print("  Het han muc ngay (RPD). Dung han.")
+                print("  Het so lan goi trong ngay (RPD). Dung han.")
                 break
+            if ly_do == "BI_CAT_MAX_TOKENS":
+                print("  Giam WORDS_PER_CALL xuong roi chay lai.")
             continue
 
         theo_tu = {}
@@ -315,10 +373,10 @@ def main():
                 if not en or not vi:
                     continue
                 if not cau_co_chua(en, word):
-                    loai_bo.append((word, "cau khong chua tu", en[:60]))
+                    loai_bo.append((word, "cau khong chua tu", en[:58]))
                     continue
                 if not co_dau_tieng_viet(vi):
-                    loai_bo.append((word, "ban dich khong phai tieng Viet", vi[:60]))
+                    loai_bo.append((word, "ban dich khong phai tieng Viet", vi[:58]))
                     continue
                 hop_le.append((en, vi))
                 if len(hop_le) == SO_CAU:
@@ -329,9 +387,9 @@ def main():
             else:
                 loai_bo.append((word, "chi co %d/%d cau dat" % (len(hop_le), SO_CAU), ""))
 
-        print("  [%d-%d] %d/%d tu dat  |  da goi %d lan  |  %.1f phut"
-              % (vt + 1, vt + len(nhom), dat, len(nhom), gem.so_lan_goi,
-                 (time.time() - bat_dau) / 60))
+        print("  [%d-%d] %d/%d tu dat  |  %s  |  da goi %d lan  |  %.1f phut"
+              % (vt + 1, vt + len(nhom), dat, len(nhom), gem.model,
+                 gem.so_lan_goi, (time.time() - bat_dau) / 60))
 
     # ------------------------------------------------------------ xuat
     if chi_thu:
@@ -340,10 +398,8 @@ def main():
         print("BAN THU - KHONG GHI VAO SHEET")
         print("=" * 62)
         for dong in sorted(ket_qua)[:12]:
-            word = [w for d, w, _, _ in dot if d == dong][0]
-            nghia = [n for d, w, _, n in dot if d == dong][0]
             print("")
-            print("%s  (%s)" % (word.upper(), nghia))
+            print("%s  (%s)" % (ten_theo_dong[dong].upper(), nghia_theo_dong[dong]))
             for en, vi in ket_qua[dong]:
                 print("   %s" % en)
                 print("   -> %s" % vi)
@@ -367,8 +423,9 @@ def main():
     print("=" * 62)
     print("KET QUA LAN CHAY NAY  (%.1f phut)" % ((time.time() - bat_dau) / 60))
     print("=" * 62)
-    print("Tu sinh du %d cau dat : %d" % (SO_CAU, len(ket_qua)))
+    print("Tu sinh du %d cau dat : %d / %d" % (SO_CAU, len(ket_qua), len(dot)))
     print("So lan goi Gemini     : %d" % gem.so_lan_goi)
+    print("So lan doi model      : %d" % gem.lan_doi_model)
     print("Cau bi loai           : %d" % len(loai_bo))
     if loi:
         print("")
@@ -379,14 +436,18 @@ def main():
                 ct = "  <- het so lan/ngay, doi sang mai"
             elif k == "QUA_TAI_503":
                 ct = "  <- Gemini qua tai, khong phai loi han muc"
-            print("   %-24s %d lan%s" % (k, v, ct))
+            elif k == "BI_CAT_MAX_TOKENS":
+                ct = "  <- phan hoi dai qua tran, giam WORDS_PER_CALL"
+            elif k == "JSON_HONG":
+                ct = "  <- model tra ve khong dung dang JSON"
+            print("   %-26s %d lan%s" % (k, v, ct))
     if loai_bo:
         print("")
-        print("Vai cau bi loai (xem de chinh prompt neu nhieu):")
+        print("Vai cau bi loai:")
         for w, ly, mau in loai_bo[:10]:
             print("   %-16s %-32s %s" % (w, ly, mau))
-    print("")
     con = len(can_lam) - len(ket_qua)
+    print("")
     if con > 0:
         print(">> Con khoang %d tu. Chay lai workflow nay." % con)
     else:
