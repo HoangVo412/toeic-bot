@@ -6,15 +6,19 @@ on:
       batch_size:
         description: 'So tu xu ly trong lan chay nay'
         required: false
-        default: '60'
+        default: '200'
       words_per_call:
-        description: 'So tu moi lan goi Gemini (3-10)'
+        description: 'So tu moi lan goi Gemini (2-10)'
         required: false
-        default: '6'
+        default: '4'
       max_calls:
-        description: 'So lan goi Gemini toi da'
+        description: 'So lan goi Gemini toi da (canh han muc RPD)'
         required: false
-        default: '40'
+        default: '80'
+      model:
+        description: 'Ep dung mot model cu the (de trong = tu chon)'
+        required: false
+        default: ''
       chi_thu:
         description: 'Chi in ra man hinh, KHONG ghi vao Sheet (1 = co)'
         required: false
@@ -23,7 +27,7 @@ on:
 jobs:
   sinh-cau:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Lay code ve
@@ -45,5 +49,6 @@ jobs:
           BATCH_SIZE: ${{ inputs.batch_size }}
           WORDS_PER_CALL: ${{ inputs.words_per_call }}
           MAX_CALLS: ${{ inputs.max_calls }}
+          MODEL: ${{ inputs.model }}
           CHI_THU: ${{ inputs.chi_thu }}
         run: python gen_examples.py
