@@ -32,16 +32,21 @@ COT_VD1 = 8                                  # H
 SO_CAU = 4
 TRAN_TOKEN = 8192
 
-# Xep xen ke cac DONG khac nhau, de khi mot dong nghen thi nhay sang dong khac.
-# LUU Y: ten model bi khai tu theo thoi gian. Log ngay 07/09/2026 cho thay
-# gemini-2.0-flash / 2.5-flash / 2.5-flash-lite deu da tra 404.
-# Neu moi ten duoi day deu hong, script tu hoi API danh sach model cua tai khoan.
+# THU TU NAY QUAN TRONG - xep theo HAN MUC NGAY (RPD), khong phai theo do manh.
+# Do tren Google AI Studio ngay 07/09/2026, goi free tier:
+#   gemini-flash-lite-latest  -> Gemini 3.5 Flash Lite : RPD 500
+#   gemini-flash-latest       -> Gemini 3.8 Flash      : RPD 20
+#   gemini-3-flash-preview    -> Gemini 3 Flash        : RPD 20
+# Sinh cau vi du can ~250 luot cho 1000 tu, nen PHAI dung ban Lite lam chinh.
+# Ban Flash de danh cho vong 2 (nhung tu ban Lite lam hong) - it luot, can chat hon.
+# LUU Y: ten model bi khai tu theo thoi gian. Neu moi ten duoi day deu hong,
+# script tu hoi API danh sach model cua tai khoan.
 MODEL_UU_TIEN = [
+    "gemini-flash-lite-latest",
     "gemini-flash-latest",
     "gemini-3-flash-preview",
-    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
     "gemini-3.6-flash",
-    "gemini-2.5-flash",
 ]
 SO_MODEL_XAC_THUC = 3        # xac thuc san bao nhieu model truoc khi chay
 DOI_MODEL_SAU = 2            # bao nhieu lan 503 lien tiep thi doi model
@@ -350,9 +355,9 @@ def main():
         except ValueError:
             return float(mac_dinh)
 
-    lo = int(so("BATCH_SIZE", 60))
-    moi_lan = max(3, min(10, int(so("WORDS_PER_CALL", 6))))
-    tran_goi = int(so("MAX_CALLS", 40))
+    lo = int(so("BATCH_SIZE", 200))
+    moi_lan = max(2, min(10, int(so("WORDS_PER_CALL", 4))))
+    tran_goi = int(so("MAX_CALLS", 80))
     chi_thu = (os.environ.get("CHI_THU") or "").strip().lower() in ("1", "true", "yes")
 
     print("=" * 62)
@@ -366,6 +371,8 @@ def main():
     print("MAX_CALLS       : %d lan goi toi da" % tran_goi)
     print("maxOutputTokens : %d  (uoc tinh can ~%d cho %d tu)"
           % (TRAN_TOKEN, int(moi_lan * 340 * 1.6), moi_lan))
+    print("MODEL           : " + (os.environ.get("MODEL") or "(tu chon theo thu tu uu tien)"))
+    print("Uoc tinh luot goi: %d cho lo nay" % ((lo + moi_lan - 1) // moi_lan))
     print("CHI_THU         : " + ("BAT - IN RA MAN HINH, KHONG GHI VAO SHEET"
                                   if chi_thu else "tat - se ghi vao Sheet"))
     print("")
@@ -418,7 +425,16 @@ def main():
     print("")
 
     gem = Gemini(gem_key)
-    gem.chon_model()
+    ep_model = (os.environ.get("MODEL") or "").strip()
+    if ep_model:
+        print("Ep dung model chi dinh: %s" % ep_model)
+        ok, ly_do = gem._thu_model(ep_model)
+        if ok:
+            gem.dung_duoc = [ep_model]
+        else:
+            print("   khong dung duoc (%s). Quay ve chon tu dong." % ly_do)
+    if not gem.dung_duoc:
+        gem.chon_model()
     print("")
 
     ten_theo_dong = {d: w for d, w, _, _ in dot}
