@@ -68,6 +68,44 @@ def thoat_html(s):
             .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+# ------------------------------------------------------- chuyen ma phat am
+def tai_va_chuyen_opus(url):
+    """Tai file phat am roi chuyen sang OGG/Opus.
+
+    VI SAO PHAI CHUYEN: Telegram chi dung "voice message" (cham la nghe ngay)
+    khi file la OGG ma hoa bang OPUS. File cua Merriam-Webster la MP3, con ban
+    .ogg cua ho ma hoa bang VORBIS - Telegram nhan nhung ha xuong thanh
+    Document, phai tai ve moi nghe duoc.
+
+    Tra ve bytes, hoac None neu that bai.
+    """
+    if not url:
+        return None
+    import subprocess
+    import requests
+    try:
+        r = requests.get(url, timeout=25)
+        if r.status_code != 200 or not r.content:
+            return None
+    except Exception as e:
+        log("   Khong tai duoc phat am (%s)" % type(e).__name__)
+        return None
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-i", "pipe:0", "-c:a", "libopus", "-b:a", "32k",
+             "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"],
+            input=r.content, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=30)
+    except Exception as e:
+        log("   Khong chay duoc ffmpeg (%s)" % type(e).__name__)
+        return None
+    if p.returncode != 0 or not p.stdout:
+        log("   ffmpeg loi: %s" % p.stderr.decode("utf-8", "ignore")[:120])
+        return None
+    return p.stdout
+
+
 # ---------------------------------------------------------------- Telegram
 class Telegram(object):
     def __init__(self, token, chat_id):
@@ -105,6 +143,39 @@ class Telegram(object):
         if nut:
             body["reply_markup"] = {"inline_keyboard": nut}
         return self.goi("sendMessage", body, im_lang)
+
+    def gui_voice(self, opus, caption, nut=None):
+        """Gui MOT tin nhan duy nhat: voice message kem phan chu.
+        Cham vao la nghe ngay, khong sinh them tin nhan nao."""
+        url = "https://api.telegram.org/bot%s/sendVoice" % self.token
+        data = {"chat_id": self.chat_id, "parse_mode": "HTML",
+                "caption": caption[:1024]}
+        if nut:
+            data["reply_markup"] = json.dumps({"inline_keyboard": nut})
+        try:
+            r = self.r.post(url, data=data,
+                            files={"voice": ("phatam.ogg", opus, "audio/ogg")},
+                            timeout=60)
+            kq = r.json()
+        except Exception as e:
+            log("   Loi mang khi gui voice: %s" % type(e).__name__)
+            return None
+        if not kq.get("ok"):
+            log("   Telegram tu choi sendVoice: %s" % kq.get("description", ""))
+            return None
+        self.da_gui += 1
+        return kq["result"]
+
+    def gui_the(self, text, audio_url, nut=None):
+        """Co phat am -> gui voice kem chu (1 tin). Khong co -> gui chu thuong."""
+        if audio_url:
+            opus = tai_va_chuyen_opus(audio_url)
+            if opus:
+                kq = self.gui_voice(opus, text, nut)
+                if kq:
+                    return kq, True
+                log("   Gui voice that bai, lui ve tin nhan chu.")
+        return self.gui(text, nut), False
 
     def gui_dai(self, text):
         """Telegram gioi han 4096 ky tu moi tin -> cat theo dong, khong cat giua chung."""
@@ -331,18 +402,14 @@ def tin_tu_moi(the, tt, thu_tu, tong):
     return "\n".join(dong)
 
 
-def nut_on_tap(dong, co_audio):
-    hang = [{"text": "👁 Xem nghĩa", "callback_data": "x:%d" % dong}]
-    if co_audio:
-        hang.append({"text": "🔊 Nghe", "callback_data": "a:%d" % dong})
-    return [hang]
+# Khong con nut "Nghe": file phat am duoc gan thang vao tin nhan the,
+# cham vao la nghe ngay, khong sinh tin nhan phu.
+def nut_on_tap(dong, co_audio=False):
+    return [[{"text": "👁 Xem nghĩa", "callback_data": "x:%d" % dong}]]
 
 
-def nut_tu_moi(dong, co_audio):
-    hang = [{"text": "⏭ Đã biết rồi", "callback_data": "b:%d" % dong}]
-    if co_audio:
-        hang.insert(0, {"text": "🔊 Nghe", "callback_data": "a:%d" % dong})
-    return [hang]
+def nut_tu_moi(dong, co_audio=False):
+    return [[{"text": "⏭ Đã biết rồi", "callback_data": "b:%d" % dong}]]
 
 
 # ---------------------------------------------------------------- dong bo
@@ -408,11 +475,12 @@ def gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay, so_luong,
     luu = []
     for i, t in enumerate(ds, start=1):
         tt = thong_tin[t.dong]
-        kq = tg.gui(tin_tu_moi(t, tt, i, len(ds)),
-                    nut_tu_moi(t.dong, bool(tt["audio"])))
+        kq, la_voice = tg.gui_the(tin_tu_moi(t, tt, i, len(ds)), tt["audio"],
+                                  nut_tu_moi(t.dong))
         if kq:
             luu.append({"message_id": kq["message_id"], "dong": t.dong,
-                        "word": t.word, "mat_sau": "", "audio": tt["audio"]})
+                        "word": t.word, "mat_sau": "", "audio": tt["audio"],
+                        "la_voice": la_voice})
         lich.gui_lan_dau(t, hom_nay)
         time.sleep(0.4)
     worker.luu_the(luu)
@@ -435,12 +503,12 @@ def gui_on_tap(tg, worker, cac_the, thong_tin, hom_nay, ngay_thi, nguong, tran):
     luu = []
     for i, t in enumerate(ds, start=1):
         tt = thong_tin[t.dong]
-        kq = tg.gui(mat_truoc(t, tt, t.tang, len(ds), i),
-                    nut_on_tap(t.dong, bool(tt["audio"])))
+        kq, la_voice = tg.gui_the(mat_truoc(t, tt, t.tang, len(ds), i),
+                                  tt["audio"], nut_on_tap(t.dong))
         if kq:
             luu.append({"message_id": kq["message_id"], "dong": t.dong,
                         "word": t.word, "mat_sau": mat_sau(t, tt, t.tang),
-                        "audio": tt["audio"]})
+                        "audio": tt["audio"], "la_voice": la_voice})
         time.sleep(0.4)
     if not worker.luu_the(luu):
         log("CANH BAO: khong luu duoc mat sau vao KV -> nut 'Xem nghia' se bao het han.")
@@ -515,7 +583,7 @@ def tra_tu(tg, cac_the, thong_tin, tu_can_tra, lich):
             d.append("Nhớ %d lần · quên %d lần" % (t.so_nho, t.so_quen))
         for en, vi in tt["vd"][:2]:
             d += ["", thoat_html(en), "→ %s" % thoat_html(vi)]
-        tg.gui("\n".join(d), nut_tu_moi(t.dong, bool(tt["audio"])) if False else None)
+        tg.gui("\n".join(d))
 
 
 # ---------------------------------------------------------------- main
