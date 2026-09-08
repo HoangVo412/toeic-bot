@@ -1,0 +1,53 @@
+name: Nap file_id phat am
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'So file xu ly trong lan chay nay'
+        required: false
+        default: '250'
+      delay:
+        description: 'Giay nghi giua hai file (Telegram gioi han ~1 tin/giay)'
+        required: false
+        default: '1.2'
+      giu_tin:
+        description: 'Giu lai tin nhan de kiem tra bang mat (1 = giu)'
+        required: false
+        default: '0'
+
+jobs:
+  nap-fileid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Lay code ve
+        uses: actions/checkout@v4
+
+      - name: Cai Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Bao dam co ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -1
+
+      - name: Cai thu vien
+        run: pip install --quiet gspread google-auth requests
+
+      - name: Nap file_id
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          DELAY: ${{ inputs.delay }}
+          GIU_TIN: ${{ inputs.giu_tin }}
+        run: python seed_fileid.py
