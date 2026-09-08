@@ -47,6 +47,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Bao dam co ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -1
+
       - name: Cai thu vien
         run: pip install --quiet gspread google-auth requests
 
