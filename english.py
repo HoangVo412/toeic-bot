@@ -220,6 +220,20 @@ class Worker(object):
             log("   Loi khi goi /luu: %s" % type(e).__name__)
             return False
 
+    def luu_phien(self, message_id, ds_the):
+        if not self.bat:
+            return False
+        try:
+            r = self.r.post(self.base + "/phien", headers=self._headers(),
+                            json={"message_id": message_id, "the": ds_the}, timeout=30)
+            if r.status_code != 200:
+                log("   /phien tra ve HTTP %d: %s" % (r.status_code, r.text[:120]))
+                return False
+            return True
+        except Exception as e:
+            log("   Loi khi goi /phien: %s" % type(e).__name__)
+            return False
+
     def lay_phan_hoi(self):
         if not self.bat:
             return []
@@ -404,6 +418,33 @@ def tin_tu_moi(the, tt, thu_tu, tong):
 
 # Khong con nut "Nghe": file phat am duoc gan thang vao tin nhan the,
 # cham vao la nghe ngay, khong sinh tin nhan phu.
+def mat_truoc_ngan(the, tt):
+    """Chi phan than the, khong co dong tieu de - Worker tu ghep tieu de."""
+    cau = chon_cau_vd(tt["vd"], the.tang)
+    d = ["<b>%s</b>" % thoat_html(the.word)]
+    if tt["ipa"]:
+        d.append("<code>%s</code>" % thoat_html(tt["ipa"]))
+    if cau:
+        che = re.sub(r"(?<!\w)" + re.escape(the.word) + r"(?!\w)", "______",
+                     cau[0], flags=re.IGNORECASE)
+        d += ["", thoat_html(che)]
+    return "\n".join(d)
+
+
+def mat_sau_ngan(the, tt):
+    cau = chon_cau_vd(tt["vd"], the.tang)
+    dau = "<b>%s</b>" % thoat_html(the.word)
+    if tt["pos"]:
+        dau += "  <i>(%s)</i>" % thoat_html(tt["pos"])
+    d = [dau]
+    if tt["ipa"]:
+        d.append("<code>%s</code>" % thoat_html(tt["ipa"]))
+    d.append("→ %s" % thoat_html(tt["nghia"]))
+    if cau:
+        d += ["", thoat_html(cau[0]), "→ %s" % thoat_html(cau[1])]
+    return "\n".join(d)
+
+
 def nut_on_tap(dong, co_audio=False):
     return [[{"text": "👁 Xem nghĩa", "callback_data": "x:%d" % dong}]]
 
@@ -489,30 +530,50 @@ def gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay, so_luong,
 
 
 def gui_on_tap(tg, worker, cac_the, thong_tin, hom_nay, ngay_thi, nguong, tran):
+    """CA PHIEN NAM TRONG MOT TIN NHAN.
+
+    Ban dau gui moi the mot tin -> 30 tin moi phien, Telegram tu phat lien tiep
+    cac voice, chat ngap, va moi lan sua phai tai lai file. Nay gui mot tin,
+    Worker doi noi dung tai cho khi bam nut.
+    """
     kh = srs.ke_hoach_ngay(cac_the, hom_nay, 0, ngay_thi, nguong, tran_on=tran)
     ds = kh["on_tap"]
     if not ds:
         log("Khong co the nao den han on.")
         return []
-    dau = "🔁 <b>ÔN TẬP — %d từ</b>" % len(ds)
-    if kh["ton_lai"]:
-        dau += ("\n<i>Còn %d từ chưa tới lượt, sẽ đưa dần vào các ngày tới.</i>"
-                % kh["ton_lai"])
-    tg.gui(dau)
 
-    luu = []
-    for i, t in enumerate(ds, start=1):
+    if not worker.bat:
+        die("Phien on tap can WORKER_URL va BOT_SECRET.",
+            "Kiem tra Variables va Secrets cua repo.")
+
+    goi_the = []
+    for t in ds:
         tt = thong_tin[t.dong]
-        kq, la_voice = tg.gui_the(mat_truoc(t, tt, t.tang, len(ds), i),
-                                  tt["audio"], nut_on_tap(t.dong))
-        if kq:
-            luu.append({"message_id": kq["message_id"], "dong": t.dong,
-                        "word": t.word, "mat_sau": mat_sau(t, tt, t.tang),
-                        "audio": tt["audio"], "la_voice": la_voice})
-        time.sleep(0.4)
-    if not worker.luu_the(luu):
-        log("CANH BAO: khong luu duoc mat sau vao KV -> nut 'Xem nghia' se bao het han.")
-    log("Da gui %d the on tap." % len(ds))
+        goi_the.append({
+            "dong": t.dong, "word": t.word, "tang": t.tang,
+            "mat_truoc": mat_truoc_ngan(t, tt),
+            "mat_sau": mat_sau_ngan(t, tt),
+            "audio": tt["audio"],
+        })
+
+    dau = ["🔁 <b>Ôn tập</b>  <i>1/%d</i>  ·  tầng %d" % (len(ds), ds[0].tang), "",
+           goi_the[0]["mat_truoc"]]
+    if kh["ton_lai"]:
+        dau.append("")
+        dau.append("<i>Còn %d từ chưa tới lượt, sẽ đưa dần vào các ngày tới.</i>"
+                   % kh["ton_lai"])
+    nut = []
+    if goi_the[0]["audio"]:
+        nut.append({"text": "🔊 Nghe", "callback_data": "a"})
+    nut.append({"text": "👁 Xem nghĩa", "callback_data": "x"})
+
+    kq = tg.gui("\n".join(dau), [nut])
+    if not kq:
+        log("Khong gui duoc tin mo dau phien.")
+        return []
+    if not worker.luu_phien(kq["message_id"], goi_the):
+        log("CANH BAO: khong luu duoc phien vao KV -> cac nut se bao het han.")
+    log("Da gui phien on tap gom %d the trong MOT tin nhan." % len(ds))
     return ds
 
 
