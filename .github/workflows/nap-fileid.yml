@@ -39,7 +39,7 @@ jobs:
           ffmpeg -version | head -1
 
       - name: Cai thu vien
-        run: pip install --quiet gspread google-auth requests
+        run: pip install --quiet -r requirements.txt
 
       - name: Nap file_id
         env:
