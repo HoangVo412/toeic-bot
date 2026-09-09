@@ -43,6 +43,7 @@ C_ON_CUOI = 19            # S
 C_SO_NHO = 20             # T
 C_SO_QUEN = 21            # U
 C_TRANG_THAI = 22         # V
+C_FILE_ID = 25            # Y - file_id Telegram cua ban phat am OGG/Opus
 SO_CAU_VD = 4
 
 
@@ -166,8 +167,24 @@ class Telegram(object):
         self.da_gui += 1
         return kq["result"]
 
-    def gui_the(self, text, audio_url, nut=None):
-        """Co phat am -> gui voice kem chu (1 tin). Khong co -> gui chu thuong."""
+    def gui_the(self, text, audio_url, nut=None, file_id=""):
+        """Co phat am -> gui voice kem chu (1 tin). Khong co -> gui chu thuong.
+        file_id (ban OGG/Opus da upload san) khong can tai va chuyen ma lai."""
+        if file_id:
+            url = "https://api.telegram.org/bot%s/sendVoice" % self.token
+            data = {"chat_id": self.chat_id, "parse_mode": "HTML",
+                    "caption": text[:1024], "voice": file_id}
+            if nut:
+                data["reply_markup"] = json.dumps({"inline_keyboard": nut})
+            try:
+                kq = self.r.post(url, json=data, timeout=30).json()
+                if kq.get("ok"):
+                    self.da_gui += 1
+                    return kq["result"], True
+                log("   sendVoice bang file_id that bai: %s"
+                    % kq.get("description", ""))
+            except Exception as e:
+                log("   Loi mang khi gui bang file_id: %s" % type(e).__name__)
         if audio_url:
             opus = tai_va_chuyen_opus(audio_url)
             if opus:
@@ -324,6 +341,9 @@ def doc_the(ws):
         thong_tin[i] = {
             "pos": o(C_POS), "ipa": o(C_IPA) or "", "nghia": o(C_NGHIA),
             "audio": o(C_AUDIO) if o(C_AUDIO) not in ("", "-") else "",
+            # file_id la ban OGG/Opus da upload san -> Telegram hien voice that,
+            # cham la nghe ngay. Uu tien dung no thay cho URL mp3.
+            "file_id": o(C_FILE_ID) if o(C_FILE_ID) not in ("", "-") else "",
             "vd": vd,
         }
         cac_the.append(t)
@@ -418,17 +438,63 @@ def tin_tu_moi(the, tt, thu_tu, tong):
 
 # Khong con nut "Nghe": file phat am duoc gan thang vao tin nhan the,
 # cham vao la nghe ngay, khong sinh tin nhan phu.
+def cung_goc(a, b):
+    """Hai tu co cung goc khong? (improve/improvement, apply/application...)
+    Tranh lay lam dap an nhieu vi chung co the cung dien dung vao cho trong.
+
+    Doi 'y' cuoi thanh 'i' truoc khi so: apply -> appli, khop voi application.
+    Nguong 5 ky tu de agency/agenda khong bi coi la cung goc.
+    """
+    def chuan(x):
+        x = x.lower().strip()
+        return (x[:-1] + "i") if x.endswith("y") else x
+    a, b = chuan(a), chuan(b)
+    n = min(len(a), len(b), 5)
+    return n >= 4 and (a[:n] == b[:n])
+
+
+def soan_lua_chon(the, tt, kho_the, thong_tin, rng, so_luong=4):
+    """Tra ve (danh_sach_tu, chi_so_dap_an).
+
+    Dap an nhieu lay tu chinh kho, UU TIEN CUNG LOAI TU - de nguoi hoc phai
+    phan biet bang NGHIA chu khong loai tru duoc bang ngu phap.
+    Loai bo tu cung goc voi dap an, vi chung co the cung dien dung.
+    """
+    pos = (tt.get("pos") or "").strip()
+    ung_vien = []
+    du_phong = []
+    for t in kho_the:
+        if t.dong == the.dong or cung_goc(t.word, the.word):
+            continue
+        if (thong_tin.get(t.dong, {}).get("pos") or "").strip() == pos and pos:
+            ung_vien.append(t)
+        else:
+            du_phong.append(t)
+    rng.shuffle(ung_vien)
+    rng.shuffle(du_phong)
+
+    nhieu = []
+    for t in ung_vien + du_phong:
+        if any(cung_goc(t.word, x) for x in nhieu):
+            continue
+        nhieu.append(t.word)
+        if len(nhieu) == so_luong - 1:
+            break
+
+    lua_chon = nhieu + [the.word]
+    rng.shuffle(lua_chon)
+    return lua_chon, lua_chon.index(the.word)
+
+
 def mat_truoc_ngan(the, tt):
-    """Chi phan than the, khong co dong tieu de - Worker tu ghep tieu de."""
+    """CHI hien cau co cho trong. Khong lo tu, khong lo phien am - nguoi hoc
+    phai chon dung tu tu 4 dap an thi moi tinh la nho."""
     cau = chon_cau_vd(tt["vd"], the.tang)
-    d = ["<b>%s</b>" % thoat_html(the.word)]
-    if tt["ipa"]:
-        d.append("<code>%s</code>" % thoat_html(tt["ipa"]))
-    if cau:
-        che = re.sub(r"(?<!\w)" + re.escape(the.word) + r"(?!\w)", "______",
-                     cau[0], flags=re.IGNORECASE)
-        d += ["", thoat_html(che)]
-    return "\n".join(d)
+    if not cau:
+        return "<i>(từ này chưa có câu ví dụ)</i>\n\n<b>%s</b>" % thoat_html(the.word)
+    che = re.sub(r"(?<!\w)" + re.escape(the.word) + r"(?!\w)", "______",
+                 cau[0], flags=re.IGNORECASE)
+    return thoat_html(che)
 
 
 def mat_sau_ngan(the, tt):
@@ -517,7 +583,7 @@ def gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay, so_luong,
     for i, t in enumerate(ds, start=1):
         tt = thong_tin[t.dong]
         kq, la_voice = tg.gui_the(tin_tu_moi(t, tt, i, len(ds)), tt["audio"],
-                                  nut_tu_moi(t.dong))
+                                  nut_tu_moi(t.dong), tt["file_id"])
         if kq:
             luu.append({"message_id": kq["message_id"], "dong": t.dong,
                         "word": t.word, "mat_sau": "", "audio": tt["audio"],
@@ -530,50 +596,60 @@ def gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay, so_luong,
 
 
 def gui_on_tap(tg, worker, cac_the, thong_tin, hom_nay, ngay_thi, nguong, tran):
-    """CA PHIEN NAM TRONG MOT TIN NHAN.
+    """Ca phien nam trong MOT tin nhan, dang TRAC NGHIEM 4 dap an.
 
-    Ban dau gui moi the mot tin -> 30 tin moi phien, Telegram tu phat lien tiep
-    cac voice, chat ngap, va moi lan sua phai tai lai file. Nay gui mot tin,
-    Worker doi noi dung tai cho khi bam nut.
+    Vi sao trac nghiem: ban truoc nguoi hoc TU cham minh nho hay quen - de rong
+    tay voi chinh minh. Nay may cham: dung ngay lan dau = nho, sai roi moi dung
+    = quen. So lieu trong /status vi vay moi phan anh dung thuc luc.
+
+    4 dap an duoc soan SAN o day, Worker chi hien thi va cham -> bam nut la
+    phan hoi ngay, khong cho GitHub Actions.
     """
     kh = srs.ke_hoach_ngay(cac_the, hom_nay, 0, ngay_thi, nguong, tran_on=tran)
     ds = kh["on_tap"]
     if not ds:
         log("Khong co the nao den han on.")
         return []
-
     if not worker.bat:
         die("Phien on tap can WORKER_URL va BOT_SECRET.",
             "Kiem tra Variables va Secrets cua repo.")
 
+    rng = random.Random()
     goi_the = []
     for t in ds:
         tt = thong_tin[t.dong]
+        lua_chon, dap_an = soan_lua_chon(t, tt, cac_the, thong_tin, rng)
         goi_the.append({
             "dong": t.dong, "word": t.word, "tang": t.tang,
             "mat_truoc": mat_truoc_ngan(t, tt),
             "mat_sau": mat_sau_ngan(t, tt),
             "audio": tt["audio"],
+            "file_id": tt["file_id"],
+            "lua_chon": lua_chon,
+            "dap_an": dap_an,
         })
 
     dau = ["🔁 <b>Ôn tập</b>  <i>1/%d</i>  ·  tầng %d" % (len(ds), ds[0].tang), "",
-           goi_the[0]["mat_truoc"]]
+           goi_the[0]["mat_truoc"], "", "<i>Chọn từ điền vào chỗ trống:</i>"]
     if kh["ton_lai"]:
-        dau.append("")
         dau.append("<i>Còn %d từ chưa tới lượt, sẽ đưa dần vào các ngày tới.</i>"
                    % kh["ton_lai"])
-    nut = []
-    if goi_the[0]["audio"]:
-        nut.append({"text": "🔊 Nghe", "callback_data": "a"})
-    nut.append({"text": "👁 Xem nghĩa", "callback_data": "x"})
 
-    kq = tg.gui("\n".join(dau), [nut])
+    lc = goi_the[0]["lua_chon"]
+    nut = [
+        [{"text": lc[0], "callback_data": "c0"},
+         {"text": lc[1], "callback_data": "c1"}],
+        [{"text": lc[2], "callback_data": "c2"},
+         {"text": lc[3], "callback_data": "c3"}],
+        [{"text": "⏰ Để sau", "callback_data": "h"}],
+    ]
+    kq = tg.gui("\n".join(dau), nut)
     if not kq:
         log("Khong gui duoc tin mo dau phien.")
         return []
     if not worker.luu_phien(kq["message_id"], goi_the):
         log("CANH BAO: khong luu duoc phien vao KV -> cac nut se bao het han.")
-    log("Da gui phien on tap gom %d the trong MOT tin nhan." % len(ds))
+    log("Da gui phien on tap gom %d the (trac nghiem) trong MOT tin nhan." % len(ds))
     return ds
 
 
