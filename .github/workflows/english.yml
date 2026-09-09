@@ -55,7 +55,7 @@ jobs:
           ffmpeg -version | head -1
 
       - name: Cai thu vien
-        run: pip install --quiet gspread google-auth requests
+        run: pip install -r requirements.txt
 
       - name: Chay bot
         env:
