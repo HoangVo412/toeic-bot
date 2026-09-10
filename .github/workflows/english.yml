@@ -3,6 +3,7 @@ name: Bot TOEIC
 on:
   repository_dispatch:
     types:
+      - chuan_bi
       - tu_moi
       - tu_moi_them
       - on_tap
@@ -17,9 +18,10 @@ on:
         description: 'Viec can chay'
         required: true
         type: choice
-        default: dong_bo
+        default: chuan_bi
         options:
           - dong_bo
+          - chuan_bi
           - tu_moi
           - on_tap
           - thong_ke
@@ -46,6 +48,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
 
       - name: Bao dam co ffmpeg
         run: |
@@ -55,7 +58,7 @@ jobs:
           ffmpeg -version | head -1
 
       - name: Cai thu vien
-        run: pip install -r requirements.txt
+        run: pip install --quiet -r requirements.txt
 
       - name: Chay bot
         env:
