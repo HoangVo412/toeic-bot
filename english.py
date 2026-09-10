@@ -237,18 +237,35 @@ class Worker(object):
             log("   Loi khi goi /luu: %s" % type(e).__name__)
             return False
 
-    def luu_phien(self, message_id, ds_the):
+    def mo_phien(self, message_id, loai, ds_the):
         if not self.bat:
             return False
         try:
             r = self.r.post(self.base + "/phien", headers=self._headers(),
-                            json={"message_id": message_id, "the": ds_the}, timeout=30)
+                            json={"message_id": message_id, "loai": loai,
+                                  "the": ds_the}, timeout=30)
             if r.status_code != 200:
                 log("   /phien tra ve HTTP %d: %s" % (r.status_code, r.text[:120]))
                 return False
             return True
         except Exception as e:
             log("   Loi khi goi /phien: %s" % type(e).__name__)
+            return False
+
+    def nap_goi(self, cac_goi):
+        """Nap cac goi da soan san vao KV de Worker phuc vu tuc thi."""
+        if not self.bat or not cac_goi:
+            return False
+        try:
+            r = self.r.post(self.base + "/goi", headers=self._headers(),
+                            json={"goi": cac_goi}, timeout=40)
+            if r.status_code != 200:
+                log("   /goi tra ve HTTP %d: %s" % (r.status_code, r.text[:120]))
+                return False
+            log("   Da nap goi: " + ", ".join(r.json().get("da_nap", [])))
+            return True
+        except Exception as e:
+            log("   Loi khi goi /goi: %s" % type(e).__name__)
             return False
 
     def lay_phan_hoi(self):
@@ -595,65 +612,23 @@ def gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay, so_luong,
     return ds
 
 
-def gui_on_tap(tg, worker, cac_the, thong_tin, hom_nay, ngay_thi, nguong, tran):
-    """Ca phien nam trong MOT tin nhan, dang TRAC NGHIEM 4 dap an.
-
-    Vi sao trac nghiem: ban truoc nguoi hoc TU cham minh nho hay quen - de rong
-    tay voi chinh minh. Nay may cham: dung ngay lan dau = nho, sai roi moi dung
-    = quen. So lieu trong /status vi vay moi phan anh dung thuc luc.
-
-    4 dap an duoc soan SAN o day, Worker chi hien thi va cham -> bam nut la
-    phan hoi ngay, khong cho GitHub Actions.
-    """
-    kh = srs.ke_hoach_ngay(cac_the, hom_nay, 0, ngay_thi, nguong, tran_on=tran)
-    ds = kh["on_tap"]
-    if not ds:
-        log("Khong co the nao den han on.")
-        return []
-    if not worker.bat:
-        die("Phien on tap can WORKER_URL va BOT_SECRET.",
-            "Kiem tra Variables va Secrets cua repo.")
-
-    rng = random.Random()
-    goi_the = []
-    for t in ds:
-        tt = thong_tin[t.dong]
-        lua_chon, dap_an = soan_lua_chon(t, tt, cac_the, thong_tin, rng)
-        goi_the.append({
-            "dong": t.dong, "word": t.word, "tang": t.tang,
-            "mat_truoc": mat_truoc_ngan(t, tt),
-            "mat_sau": mat_sau_ngan(t, tt),
-            "audio": tt["audio"],
-            "file_id": tt["file_id"],
-            "lua_chon": lua_chon,
-            "dap_an": dap_an,
-        })
-
-    dau = ["🔁 <b>Ôn tập</b>  <i>1/%d</i>  ·  tầng %d" % (len(ds), ds[0].tang), "",
-           goi_the[0]["mat_truoc"], "", "<i>Chọn từ điền vào chỗ trống:</i>"]
-    if kh["ton_lai"]:
-        dau.append("<i>Còn %d từ chưa tới lượt, sẽ đưa dần vào các ngày tới.</i>"
-                   % kh["ton_lai"])
-
-    lc = goi_the[0]["lua_chon"]
-    nut = [
-        [{"text": lc[0], "callback_data": "c0"},
-         {"text": lc[1], "callback_data": "c1"}],
-        [{"text": lc[2], "callback_data": "c2"},
-         {"text": lc[3], "callback_data": "c3"}],
-        [{"text": "⏰ Để sau", "callback_data": "h"}],
-    ]
-    kq = tg.gui("\n".join(dau), nut)
-    if not kq:
-        log("Khong gui duoc tin mo dau phien.")
-        return []
-    if not worker.luu_phien(kq["message_id"], goi_the):
-        log("CANH BAO: khong luu duoc phien vao KV -> cac nut se bao het han.")
-    log("Da gui phien on tap gom %d the (trac nghiem) trong MOT tin nhan." % len(ds))
-    return ds
+def dong_goi_the(t, tt, kho_the, thong_tin, rng, co_trac_nghiem=True):
+    """Dong mot the thanh du lieu Worker hien thi duoc, khong can hoi lai Sheet."""
+    goi = {
+        "dong": t.dong, "word": t.word, "tang": t.tang,
+        "mat_truoc": mat_truoc_ngan(t, tt),
+        "mat_sau": mat_sau_ngan(t, tt),
+        "audio": tt["audio"], "file_id": tt["file_id"],
+    }
+    if co_trac_nghiem:
+        lua_chon, dap_an = soan_lua_chon(t, tt, kho_the, thong_tin, rng)
+        goi["lua_chon"] = lua_chon
+        goi["dap_an"] = dap_an
+    return goi
 
 
-def gui_thong_ke(tg, cac_the, thong_tin, hom_nay, lich, ngay_thi):
+def soan_thong_ke(cac_the, thong_tin, hom_nay, lich, ngay_thi):
+    """Soan san van ban thong ke de Worker tra loi /status tuc thi."""
     tk = srs.thong_ke(cac_the, hom_nay, lich)
     bat_dau = min([t.lan_dau_gui for t in cac_the if t.lan_dau_gui] or [hom_nay])
     ngay_thu = (hom_nay - bat_dau).days + 1
@@ -671,9 +646,8 @@ def gui_thong_ke(tg, cac_the, thong_tin, hom_nay, lich, ngay_thi):
     if tk["theo_tang"]:
         d += ["", "<b>Phân bố theo tầng</b>"]
         for tang in sorted(tk["theo_tang"]):
-            kc = lich.khoang_cach(tang)
             d.append("  tầng %d (ôn mỗi %d ngày): %d từ"
-                     % (tang, kc, tk["theo_tang"][tang]))
+                     % (tang, lich.khoang_cach(tang), tk["theo_tang"][tang]))
     if tk["tong_luot_on"]:
         d += ["", "Tỷ lệ nhớ: <b>%.0f%%</b>  (%d lượt ôn)"
               % (tk["ty_le_nho"], tk["tong_luot_on"])]
@@ -682,13 +656,100 @@ def gui_thong_ke(tg, cac_the, thong_tin, hom_nay, lich, ngay_thi):
     if tk["tu_cung_dau"]:
         d += ["", "<b>Từ cứng đầu</b> (quên từ 3 lần trở lên)"]
         for t in tk["tu_cung_dau"]:
-            tt = thong_tin.get(t.dong, {})
             d.append("  • %s — %s  <i>(quên %d lần)</i>"
-                     % (thoat_html(t.word), thoat_html(tt.get("nghia", "")), t.so_quen))
-    con_kho = tk["chua_gui"]
-    if con_kho:
-        d += ["", "Kho còn lại: %d từ" % con_kho]
-    tg.gui_dai("\n".join(d))
+                     % (thoat_html(t.word),
+                        thoat_html(thong_tin.get(t.dong, {}).get("nghia", "")),
+                        t.so_quen))
+    if tk["chua_gui"]:
+        d += ["", "Kho còn lại: %d từ" % tk["chua_gui"]]
+    return "\n".join(d)
+
+
+def chon_on_lai(cac_the, so_luong=5):
+    """Cac the DA HOC nhung lau chua gap nhat - dung khi khong con gi den han."""
+    da_hoc = [t for t in cac_the
+              if t.trang_thai in (srs.DANG_HOC, srs.THUOC) and t.lan_on_cuoi]
+    da_hoc.sort(key=lambda t: (t.lan_on_cuoi, t.dong))
+    return da_hoc[:so_luong]
+
+
+def chuan_bi_ngay(tg, worker, ws, cac_the, thong_tin, lich, hom_nay,
+                  so_tu_moi, ngay_thi, nguong, tran_on):
+    """VIEC DUY NHAT cua GitHub Actions moi ngay.
+
+    Soan san moi thu roi nap vao KV. Sau do tat ca nhung gi nguoi dung cham vao
+    deu do Worker phuc vu tu KV - duoi mot giay, thay vi cho Actions khoi dong
+    mat gan mot phut.
+
+    Gui luon phien TU MOI vi day dung la gio 05:30.
+    """
+    rng = random.Random()
+    hom_nay_str = hom_nay.isoformat()
+
+    # ---- 1. Tu moi hom nay ----
+    kh = srs.ke_hoach_ngay(cac_the, hom_nay, so_tu_moi, ngay_thi, nguong,
+                           rng=rng, tran_on=tran_on)
+    tu_moi = kh["tu_moi"]
+    if kh["nuoc_rut"]:
+        log("Dang nuoc rut (con %d ngay) -> khong nap tu moi."
+            % kh["con_lai_den_ngay_thi"])
+
+    # ---- 2. On tap hom nay ----
+    goi_on = [dong_goi_the(t, thong_tin[t.dong], cac_the, thong_tin, rng)
+              for t in kh["on_tap"]]
+
+    # ---- 3. Du phong: cac tu lau chua gap nhat ----
+    goi_on_lai = [dong_goi_the(t, thong_tin[t.dong], cac_the, thong_tin, rng)
+                  for t in chon_on_lai(cac_the, 5)]
+
+    # ---- 4. Kho tu moi du phong cho lenh /tuvung ----
+    them = srs.chon_tu_moi([t for t in cac_the if t not in tu_moi],
+                           so_tu_moi, ("A", "B"), rng)
+    goi_them = [dong_goi_the(t, thong_tin[t.dong], cac_the, thong_tin, rng,
+                             co_trac_nghiem=False) for t in them]
+
+    # ---- 5. Nap het vao KV ----
+    worker.nap_goi({
+        "on_tap": {"ngay": hom_nay_str, "the": goi_on,
+                   "ton_lai": kh.get("ton_lai", 0), "da_dung": False},
+        "on_lai": {"ngay": hom_nay_str, "the": goi_on_lai},
+        "tu_moi_them": {"ngay": hom_nay_str, "the": goi_them, "da_dung": False},
+        "thong_ke": {"ngay": hom_nay_str,
+                     "text": soan_thong_ke(cac_the, thong_tin, hom_nay, lich, ngay_thi)},
+    })
+    log("Da soan: %d the on tap, %d the on lai, %d tu moi du phong."
+        % (len(goi_on), len(goi_on_lai), len(goi_them)))
+
+    # ---- 6. Gui phien tu moi ngay bay gio ----
+    if not tu_moi:
+        log("Khong con tu moi de gui.")
+        return []
+    goi_tu_moi = [dong_goi_the(t, thong_tin[t.dong], cac_the, thong_tin, rng,
+                               co_trac_nghiem=False) for t in tu_moi]
+    con = srs.so_ngay_con_lai(hom_nay, ngay_thi)
+    dau = ["📖 <b>Từ mới</b>  <i>1/%d</i>" % len(tu_moi), "", goi_tu_moi[0]["mat_sau"]]
+    if con is not None:
+        dau.append("")
+        dau.append("<i>Còn %d ngày đến kỳ thi</i>" % con)
+    nut = []
+    if goi_tu_moi[0]["audio"] or goi_tu_moi[0]["file_id"]:
+        nut.append({"text": "🔊 Nghe", "callback_data": "a"})
+    nut.append({"text": "⏭ Đã biết rồi", "callback_data": "b"})
+    kq = tg.gui("\n".join(dau),
+                [nut, [{"text": "Tiếp →" if len(tu_moi) > 1 else "Xong ✓",
+                        "callback_data": "t"}]])
+    if kq:
+        worker.mo_phien(kq["message_id"], "tu_moi", goi_tu_moi)
+        for t in tu_moi:
+            lich.gui_lan_dau(t, hom_nay)
+        log("Da gui phien tu moi gom %d tu trong MOT tin nhan." % len(tu_moi))
+        return tu_moi
+    log("Khong gui duoc phien tu moi.")
+    return []
+
+
+def gui_thong_ke(tg, cac_the, thong_tin, hom_nay, lich, ngay_thi):
+    tg.gui_dai(soan_thong_ke(cac_the, thong_tin, hom_nay, lich, ngay_thi))
 
 
 def tra_tu(tg, cac_the, thong_tin, tu_can_tra, lich):
@@ -794,14 +855,21 @@ def main():
 
     # --- Thuc hien viec duoc yeu cau ---
     moi_gui = []
-    if viec in ("tu_moi", "tu_moi_them"):
-        moi_gui = gui_tu_moi(tg, worker, ws, cac_the, thong_tin, lich, hom_nay,
-                             so_tu_moi, ngay_thi, nguong,
-                             them=(viec == "tu_moi_them"))
+    if viec in ("chuan_bi", "tu_moi"):
+        moi_gui = chuan_bi_ngay(tg, worker, ws, cac_the, thong_tin, lich, hom_nay,
+                                so_tu_moi, ngay_thi, nguong, tran_on)
         if moi_gui:
             ghi_the(ws, moi_gui)
+    elif viec == "tu_moi_them":
+        # Worker phuc vu lenh /tuvung tu goi trong KV. Vao day nghia la goi da het
+        # -> soan lai goi moi cho lan sau.
+        chuan_bi_ngay(tg, worker, ws, cac_the, thong_tin, lich, hom_nay,
+                      0, ngay_thi, nguong, tran_on)
     elif viec == "on_tap":
-        gui_on_tap(tg, worker, cac_the, thong_tin, hom_nay, ngay_thi, nguong, tran_on)
+        # Chi de chay tay khi can soan lai goi giua ngay
+        chuan_bi_ngay(tg, worker, ws, cac_the, thong_tin, lich, hom_nay,
+                      0, ngay_thi, nguong, tran_on)
+        log("Da soan lai goi. Go /onlai tren Telegram de mo phien.")
     elif viec == "thong_ke":
         gui_thong_ke(tg, cac_the, thong_tin, hom_nay, lich, ngay_thi)
     elif viec == "tra_tu":
@@ -809,7 +877,6 @@ def main():
     elif viec == "dong_bo":
         pass
     elif viec in ("toeic_de", "toeic_da"):
-        # Chua co ngan hang cau -> bao ro, khong im lang de nguoi dung khoi cho.
         log("Viec '%s' chua duoc cai dat (chua co ngan hang cau TOEIC)." % viec)
         if viec == "toeic_de":
             tg.gui("🚧 Phần luyện đề TOEIC chưa dựng xong.\n"
