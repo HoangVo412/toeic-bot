@@ -1,0 +1,35 @@
+name: Do giam khao
+
+on:
+  workflow_dispatch:
+    inputs:
+      so_cau:
+        description: "So cau doi chung de cham moi model (48 = 4 luot goi/model)"
+        required: false
+        default: "48"
+      model_them:
+        description: "Them ten model muon cham, cach nhau dau phay"
+        required: false
+        default: ""
+
+jobs:
+  do:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cai thu vien
+        run: pip install -r requirements.txt
+
+      - name: Do
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          SO_CAU: ${{ github.event.inputs.so_cau }}
+          MODEL_THEM: ${{ github.event.inputs.model_them }}
+        run: python do_giam_khao.py
