@@ -1,0 +1,69 @@
+name: Sinh cau hoi TOEIC
+
+on:
+  workflow_dispatch:
+    inputs:
+      so_cau_p5:
+        description: "So cau Part 5 can sinh (0 = bo qua)"
+        required: false
+        default: "40"
+      so_doan_p6:
+        description: "So doan Part 6 can sinh, moi doan 4 cho trong (0 = bo qua)"
+        required: false
+        default: "5"
+      chi_dang:
+        description: "Chi sinh mot dang (de trong = tat ca). VD: TU_LOAI, THI, GIOI_TU"
+        required: false
+        default: ""
+      model_kiem:
+        description: "Ten model lam giam khao (de trong = tu chon). Lay tu ket qua Do giam khao"
+        required: false
+        default: ""
+      kho_hon:
+        description: "Yeu cau do kho cao hon"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: toeic-sheet
+  cancel-in-progress: false
+
+jobs:
+  sinh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Cai thu vien
+        run: pip install -r requirements.txt
+
+      - name: Kiem cu phap
+        run: python -m py_compile gen_cauhoi.py cauhoi_config.py
+
+      - name: Sinh cau hoi
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          SO_CAU_P5: ${{ github.event.inputs.so_cau_p5 }}
+          SO_DOAN_P6: ${{ github.event.inputs.so_doan_p6 }}
+          CHI_DANG: ${{ github.event.inputs.chi_dang }}
+          KHO_HON: ${{ github.event.inputs.kho_hon }}
+          MODEL_KIEM: ${{ github.event.inputs.model_kiem }}
+        run: python gen_cauhoi.py
+
+      - name: Tai len file xung dot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xung-dot
+          path: xungdot_*.csv
+          if-no-files-found: ignore
+          retention-days: 30
