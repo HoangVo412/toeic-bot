@@ -154,7 +154,7 @@ def cham(model, bo):
     sai_theo_dang = {}
     for i in range(0, len(bo), G.LO_KIEM):
         lo = bo[i:i + G.LO_KIEM]
-        txt, ly = G.goi_gemini(model, G.prompt_kiem(lo), max_tokens=6144, nhiet=0.0)
+        txt, ly = G.goi_gemini(model, G.prompt_kiem(lo), max_tokens=16384, nhiet=0.0)
         if txt is None:
             log(f"    lo {i//G.LO_KIEM+1}: HONG -> {ly}")
             khong_tra += len(lo)
@@ -218,7 +218,8 @@ def main():
     for m in (MODEL_THEM + G.TEN_KIEM):
         if m in ung_vien:
             continue
-        txt, ly = G.goi_gemini(m, 'Tra ve dung JSON: {"ok":1}', max_tokens=64, nhiet=0)
+        txt, ly = G.goi_gemini(m, 'Tra ve dung JSON: {"ok":1}',
+                               max_tokens=2048, nhiet=0, nghi=0)
         if txt:
             ung_vien.append(m)
             log(f"  OK   : {m}")
