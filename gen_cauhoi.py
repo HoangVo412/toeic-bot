@@ -59,7 +59,7 @@ EP_MODEL_KIEM = (os.environ.get("MODEL_KIEM") or "").strip()
 
 LO_P5 = 6      # so cau moi lan goi Gemini (Part 5)
 LO_P6 = 2      # so doan moi lan goi Gemini (Part 6)
-LO_KIEM = 12   # so cau moi lan goi Model B (dau ra ~60 token/cau, xa tran)
+LO_KIEM = 8    # nho lai: model kiem co the ton them token cho buoc suy nghi
 
 
 def kiem_cau_hinh():
@@ -102,6 +102,8 @@ TEN_KIEM = [
 RPM_MAC_DINH = {"lite": 15, "khac": 5}
 _lan_goi_cuoi = {}
 _so_429 = {}
+# None = chua biet model co nhan thinkingConfig khong; False = khong nhan
+_nhan_thinking = {}
 
 
 def _rpm(model):
@@ -119,22 +121,36 @@ def _cho_nhip(model):
     _lan_goi_cuoi[model] = time.time()
 
 
-def goi_gemini(model, prompt, max_tokens=8192, nhiet=0.85):
-    """Tra ve (text, ly_do_ket_thuc) hoac (None, ma_loi)."""
+def goi_gemini(model, prompt, max_tokens=8192, nhiet=0.85, nghi=None, _lan2=False):
+    """Tra ve (text, ly_do_ket_thuc) hoac (None, ma_loi).
+
+    nghi = ngan sach token danh cho buoc suy nghi noi bo (thinkingBudget).
+    Dat 0 de tat han. Cac model the he moi mac dinh CO suy nghi, va buoc do
+    AN VAO maxOutputTokens — goi voi max_tokens nho se tra ve finishReason
+    MAX_TOKENS ma KHONG co chu nao. Do la ly do phep thu 64 token bao model
+    "hong" trong khi model van song.
+    """
     _cho_nhip(model)
     url = f"{API}/models/{model}:generateContent?key={GEMINI_KEY}"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": nhiet,
-            "maxOutputTokens": max_tokens,
-            "responseMimeType": "application/json",
-        },
+    gc = {
+        "temperature": nhiet,
+        "maxOutputTokens": max_tokens,
+        "responseMimeType": "application/json",
     }
+    if nghi is not None and _nhan_thinking.get(model) is not False:
+        gc["thinkingConfig"] = {"thinkingBudget": nghi}
+    body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": gc}
     try:
         r = requests.post(url, json=body, timeout=180)
     except requests.RequestException as e:
         return None, f"MANG:{type(e).__name__}"
+
+    # Model khong biet truong thinkingConfig -> nho lai va goi lai khong kem
+    if (r.status_code == 400 and "thinkingConfig" in gc and not _lan2
+            and re.search(r"thinking|Unknown name|unknown field", r.text, re.I)):
+        _nhan_thinking[model] = False
+        log(f"    ({model} khong nhan thinkingConfig -> goi lai khong kem)")
+        return goi_gemini(model, prompt, max_tokens, nhiet, None, _lan2=True)
 
     if r.status_code == 429:
         _so_429[model] = _so_429.get(model, 0) + 1
@@ -148,7 +164,13 @@ def goi_gemini(model, prompt, max_tokens=8192, nhiet=0.85):
         d = r.json()
         cand = d["candidates"][0]
         ly_do = cand.get("finishReason", "")
-        txt = "".join(p.get("text", "") for p in cand["content"]["parts"])
+        phan = (cand.get("content") or {}).get("parts") or []
+        txt = "".join(x.get("text", "") for x in phan)
+        if not txt:
+            if ly_do == "MAX_TOKENS":
+                # Buoc suy nghi noi bo da an het ngan sach, chua kip tra chu nao
+                return None, f"TRAN_TOKEN_KHI_NGHI (max_tokens={max_tokens} qua nho)"
+            return None, f"TRONG (finishReason={ly_do or 'khong ro'})"
         return txt, ly_do
     except (KeyError, IndexError, ValueError):
         return None, f"PHANHOI_LA:{r.text[:120]}"
@@ -158,7 +180,8 @@ def chon_model(danh_sach, can=2, uu_tien_lite=True):
     """Xac thuc model chay duoc trong danh_sach. Tu do tu API neu ten cung hong."""
     ok = []
     for m in danh_sach:
-        txt, ly = goi_gemini(m, 'Tra ve dung JSON: {"ok":1}', max_tokens=64, nhiet=0)
+        txt, ly = goi_gemini(m, 'Tra ve dung JSON: {"ok":1}',
+                             max_tokens=2048, nhiet=0, nghi=0)
         if txt:
             ok.append(m)
             log(f"  model OK   : {m}")
@@ -187,7 +210,8 @@ def chon_model(danh_sach, can=2, uu_tien_lite=True):
     for m in ds:
         if m in ok:
             continue
-        txt, ly = goi_gemini(m, 'Tra ve dung JSON: {"ok":1}', max_tokens=64, nhiet=0)
+        txt, ly = goi_gemini(m, 'Tra ve dung JSON: {"ok":1}',
+                             max_tokens=2048, nhiet=0, nghi=0)
         if txt:
             ok.append(m)
             log(f"  model OK   : {m}")
@@ -653,7 +677,7 @@ def kiem_bang_model(model, cau_list):
     """Gan ket qua vao tung cau: c['kiem'] = dict hoac None."""
     for i in range(0, len(cau_list), LO_KIEM):
         lo = cau_list[i:i + LO_KIEM]
-        txt, ly = goi_gemini(model, prompt_kiem(lo), max_tokens=6144, nhiet=0.0)
+        txt, ly = goi_gemini(model, prompt_kiem(lo), max_tokens=16384, nhiet=0.0)
         if txt is None:
             log(f"  kiem lo {i//LO_KIEM+1}: hong -> {ly}")
             continue
@@ -705,9 +729,12 @@ def main():
         m_kiem = chon_model(TEN_KIEM, can=1, uu_tien_lite=False)[0]
 
     if m_kiem == m_sinh:
-        log("*** CANH BAO NANG: model sinh va model kiem TRUNG NHAU.")
-        log("    Pass 2 khong con doc lap -> ket qua DA_DUYET khong dang tin.")
-        log("    Dung lai, chay 'Do giam khao' de tim model kiem khac.")
+        log("*** LOI: model sinh va model kiem TRUNG NHAU.")
+        log("    Pass 2 khong con doc lap. Moi cau se duoc DA_DUYET mot cach")
+        log("    GIA TAO vi chinh model do tu cham bai cua no.")
+        log("    Ghi vao Sheet luc nay con te hon la khong ghi gi. Dung han.")
+        log("    Cach sua: chay 'Do giam khao' de tim model kiem KHAC model sinh.")
+        sys.exit(1)
     log(f"\nModel sinh = {m_sinh} | Model kiem = {m_kiem}")
 
     log("\n--- Mo Google Sheet ---")
