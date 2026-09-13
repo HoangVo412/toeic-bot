@@ -25,6 +25,7 @@ import random
 import re
 import sys
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -72,6 +73,12 @@ def kiem_cau_hinh():
     log(f"Yeu cau  | Part5={SO_CAU_P5} cau | Part6={SO_DOAN_P6} doan"
         f" | chi_dang={CHI_DANG or '(tat ca)'} | kho_hon={KHO_HON}")
     log(f"Model kiem ep buoc: {EP_MODEL_KIEM or '(tu chon)'}")
+    if EP_MODEL_KIEM and not re.fullmatch(r"[A-Za-z0-9.\-_/]+", EP_MODEL_KIEM):
+        log("*** LOI: o 'model_kiem' khong phai ten model hop le.")
+        log(f"    Dang nhan: {EP_MODEL_KIEM!r}")
+        log("    Day la cho dien TEN MODEL, vi du: gemini-flash-latest")
+        log("    De TRONG neu chua chay 'Do giam khao'. Dung han.")
+        sys.exit(1)
 
 
 # ===========================================================================
@@ -252,64 +259,78 @@ def doc_json_list(txt):
 # ===========================================================================
 # 3. PROMPT
 # ===========================================================================
-LUAT_CHUNG = """QUY TAC BAT BUOC:
-- Cau tieng Anh dung van phong cong so trang trong, dung khong khi de TOEIC that.
-- KHONG dung ten rieng co that, khong dung ten cong ty co that.
-- Cho trong ky hieu bang dung 4 dau gach duoi: ____
-- Moi cau CHI co DUNG MOT cho trong.
-- Ba dap an sai phai SAI RO RANG ve ngu phap, khong duoc cung chap nhan duoc.
-- Vi tri dap an dung phai rai deu, khong tap trung mot chu cai.
-- Giai thich viet bang TIENG VIET CO DAU, neu ro QUY TAC ngu phap, khong dien giai chung chung.
-- Truong "vi_sao_sai" neu ngan gon vi sao TUNG dap an sai la sai.
-- Tra ve DUNG mot mang JSON, khong loi dan, khong rao ```."""
+LUAT_CHUNG = """QUY TẮC BẮT BUỘC:
+- Câu tiếng Anh dùng văn phong công sở trang trọng, đúng không khí đề TOEIC thật.
+- KHÔNG dùng tên riêng có thật, không dùng tên công ty có thật.
+- Chỗ trống ký hiệu bằng đúng 4 dấu gạch dưới: ____
+- Mỗi câu CHỈ có ĐÚNG MỘT chỗ trống.
+- Ba đáp án sai phải SAI RÕ RÀNG về ngữ pháp, không được cũng chấp nhận được.
+- Vị trí đáp án đúng phải rải đều, không tập trung một chữ cái.
+
+QUY TẮC VỀ NGÔN NGỮ — ĐỌC KỸ, ĐÂY LÀ LỖI HAY GẶP NHẤT:
+- Trường "giai_thich" và "vi_sao_sai" phải viết bằng TIẾNG VIỆT CÓ ĐẦY ĐỦ DẤU
+  THANH VÀ DẤU MŨ, đúng như câu bạn đang đọc này.
+- TUYỆT ĐỐI KHÔNG viết tiếng Việt không dấu (kiểu "Trang ngu chi thoi gian").
+  Câu nào viết không dấu sẽ bị loại bỏ hoàn toàn.
+- Cũng không viết bằng tiếng Anh.
+- "giai_thich" phải nêu rõ QUY TẮC ngữ pháp, không diễn giải chung chung.
+- "vi_sao_sai" nêu ngắn gọn vì sao TỪNG đáp án sai là sai.
+
+Trả về ĐÚNG một mảng JSON, không lời dẫn, không rào ```."""
 
 
 def prompt_p5(dang, so_cau, boi_canh):
     d = CFG.DANG[dang]
-    kho = ("Do kho: cao — them thanh phan xen giua chu ngu va dong tu, "
-           "hoac dung cau truc it gap.") if KHO_HON else \
-          "Do kho: trung binh, ngang de TOEIC chinh thuc."
-    return f"""Ban la nguoi ra de TOEIC Part 5 (Incomplete Sentences).
+    kho = ("Độ khó: cao — thêm thành phần xen giữa chủ ngữ và động từ, "
+           "hoặc dùng cấu trúc ít gặp.") if KHO_HON else \
+          "Độ khó: trung bình, ngang đề TOEIC chính thức."
+    return f"""Bạn là người ra đề TOEIC Part 5 (Incomplete Sentences).
 
-Sinh {so_cau} cau hoi ngu phap dang "{d['ten']}".
-Dac diem dang nay: {d['goi_y']}
+Sinh {so_cau} câu hỏi ngữ pháp dạng "{d['ten']}".
+Đặc điểm dạng này: {d['goi_y']}
 {kho}
-Boi canh cac cau: {boi_canh}
+Bối cảnh các câu: {boi_canh}
 
 {LUAT_CHUNG}
 
-Dinh dang moi phan tu:
-{{"cau":"The manager ____ the report before the deadline.",
+Định dạng mỗi phần tử (chú ý phần giải thích viết CÓ DẤU đầy đủ):
+{{"cau":"The accounting team ____ the quarterly report before the deadline last Friday.",
  "a":"submit","b":"submits","c":"submitted","d":"submitting",
  "dung":"C",
- "giai_thich":"Trang ngu 'before the deadline' cung voi ngu canh da hoan tat yeu cau thi qua khu don.",
- "vi_sao_sai":"A: thieu chia thi. B: hien tai don khong hop moc thoi gian. D: V-ing khong lam dong tu chinh.",
+ "giai_thich":"Trạng ngữ 'last Friday' xác định mốc thời gian đã qua, nên động từ chính phải chia ở thì quá khứ đơn.",
+ "vi_sao_sai":"A: động từ nguyên mẫu, không chia thì. B: hiện tại đơn, trái với mốc quá khứ. D: dạng V-ing không làm động từ chính của câu.",
  "do_kho":2}}"""
 
 
 def prompt_p6(so_doan, boi_canh):
     dangs = ", ".join(f"{k} ({CFG.DANG[k]['ten']})" for k in CFG.TY_LE_PART6)
-    return f"""Ban la nguoi ra de TOEIC Part 6 (Text Completion).
+    return f"""Bạn là người ra đề TOEIC Part 6 (Text Completion).
 
-Sinh {so_doan} doan van, moi doan {CFG.SO_TU_TOI_THIEU_DOAN}-{CFG.SO_TU_TOI_DA_DOAN} tu,
-dang email cong ty / thong bao / quang cao. Boi canh: {boi_canh}
+Sinh {so_doan} đoạn văn, mỗi đoạn {CFG.SO_TU_TOI_THIEU_DOAN}-{CFG.SO_TU_TOI_DA_DOAN} từ,
+dạng email công ty / thông báo / quảng cáo. Bối cảnh: {boi_canh}
 
-Moi doan co DUNG 4 cho trong, danh dau trong doan bang (1) (2) (3) (4).
-Bon cho trong phai thuoc bon dang: {dangs}
-Cho trong dang TU_NOI PHAI phu thuoc quan he logic voi cau LIEN TRUOC —
-doc rieng cau chua cho trong thi khong the chon dung.
+Mỗi đoạn có ĐÚNG 4 chỗ trống, đánh dấu trong đoạn bằng (1) (2) (3) (4).
+Bốn chỗ trống phải thuộc bốn dạng: {dangs}
+Chỗ trống dạng TU_NOI PHẢI phụ thuộc quan hệ logic với câu LIỀN TRƯỚC —
+đọc riêng câu chứa chỗ trống thì không thể chọn đúng.
+
+Riêng dạng THI trong Part 6: bốn đáp án phải là bốn dạng chia của CÙNG MỘT
+động từ có nghĩa (ví dụ completes / completed / will complete / has completed).
+KHÔNG được lấy bốn trợ động từ khác nhau (were / will / has been / being).
 
 {LUAT_CHUNG}
-(Rieng Part 6: cho trong trong doan dung (1)(2)(3)(4), truong "cau" la
-cau chua cho trong tach rieng ra, van dung ____ )
+(Riêng Part 6: chỗ trống trong đoạn dùng (1)(2)(3)(4), trường "cau" là
+câu chứa chỗ trống tách riêng ra, vẫn dùng ____ )
 
-Dinh dang moi phan tu:
-{{"doan":"Dear staff, the elevator in Building B will be out of service next week. (1) ____, please use the east stairwell. We (2) ____ the maintenance work by Friday. ...",
+Định dạng mỗi phần tử:
+{{"doan":"Dear staff, the elevator in Building B will be out of service next week. (1) ____, please use the east stairwell. Our contractor (2) ____ the maintenance work by Friday. ...",
  "cho_trong":[
    {{"so":1,"dang":"TU_NOI","cau":"____, please use the east stairwell.",
      "a":"However","b":"In the meantime","c":"For example","d":"Similarly","dung":"B",
-     "giai_thich":"...","vi_sao_sai":"...","do_kho":2}},
-   {{"so":2,"dang":"THI","cau":"We ____ the maintenance work by Friday.", ...}}
+     "giai_thich":"Câu trước nêu thang máy ngừng hoạt động, câu này nêu giải pháp tạm thời trong khoảng thời gian đó.",
+     "vi_sao_sai":"A: chỉ quan hệ tương phản, không có tương phản ở đây. C: không có ví dụ nào được nêu. D: không có sự tương đồng nào.",
+     "do_kho":2}},
+   {{"so":2,"dang":"THI","cau":"Our contractor ____ the maintenance work by Friday.", ...}}
  ]}}"""
 
 
@@ -355,18 +376,46 @@ def _chuan(s):
 
 
 def _co_dau_viet(s):
+    """Do dau tieng Viet. Phai chuan hoa NFC truoc: mot so nguon tra ve dang
+    to hop (a + U+0300) trong nhin y het 'a' co dau nhung khong khop regex."""
+    s = unicodedata.normalize("NFC", str(s or ""))
     return bool(re.search(r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩị"
                           r"òóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]", s, re.I))
 
 
+# Tro dong tu: khong mang thong tin goc tu, phai bo qua khi so goc.
+# Vi du "has been reviewed" / "will review" / "reviewing" deu cung goc "revi",
+# nhung neu lay tu DAI NHAT thi ra "been" / "will" / "reviewing" -> lech.
+_TRO_DONG_TU = {
+    "be", "am", "is", "are", "was", "were", "been", "being",
+    "have", "has", "had", "having", "do", "does", "did", "doing",
+    "will", "would", "shall", "should", "can", "could", "may", "might",
+    "must", "to", "not", "get", "gets", "got", "getting",
+}
+# Khi CA 4 lua chon chi toan tro dong tu (cau hoi ve chinh dong tu to be),
+# phai gop cac dang bien the ve mot goc chung, neu khong se bao lech gia.
+_HO_TRO_DONG_TU = {
+    **{w: "beee" for w in ("be", "am", "is", "are", "was", "were", "been", "being")},
+    **{w: "have" for w in ("have", "has", "had", "having")},
+    **{w: "dooo" for w in ("do", "does", "did", "doing")},
+    **{w: "gett" for w in ("get", "gets", "got", "getting")},
+}
+
+
 def _goc(tu):
-    """Lay 4 ky tu dau cua tu dai nhat trong lua chon, chuan hoa y -> i."""
-    toks = re.findall(r"[A-Za-z]+", tu)
+    """Lay 4 ky tu dau cua tu MANG NGHIA trong lua chon, chuan hoa y -> i."""
+    toks = [t.lower() for t in re.findall(r"[A-Za-z]+", tu)]
     if not toks:
         return ""
-    dai = max(toks, key=len).lower()
-    dai = re.sub(r"y$", "i", dai)
-    return dai[:4]
+    that = [t for t in toks if t not in _TRO_DONG_TU]
+    if that:
+        dai = max(that, key=len)
+        return re.sub(r"y$", "i", dai)[:4]
+    # Chi con tro dong tu -> gop theo ho cua tu CUOI (tu chinh cua cum)
+    for t in reversed(toks):
+        if t in _HO_TRO_DONG_TU:
+            return _HO_TRO_DONG_TU[t]
+    return "modl"       # toan tinh thai tu: will / would / shall / should
 
 
 def kiem_co_hoc(c):
@@ -425,9 +474,10 @@ def kiem_co_hoc(c):
 
     gt = _chuan(c.get("giai_thich"))
     if len(gt) < CFG.DO_DAI_GIAI_THICH_MIN:
-        loi.append("giai thich qua ngan")
+        loi.append(f"giai thich qua ngan: {gt!r}")
     elif not _co_dau_viet(gt):
-        loi.append("giai thich khong co dau tieng Viet")
+        # In repr de lo ky tu vo hinh / dang to hop — bai hoc 1.3 BAI-HOC-2026-09-10
+        loi.append(f"giai thich khong co dau tieng Viet: {gt[:70]!r}")
     c["giai_thich"] = gt
     c["vi_sao_sai"] = _chuan(c.get("vi_sao_sai"))
 
@@ -481,9 +531,13 @@ def lay_tab(sh, ten, cot):
         if not hien:
             ws.append_row(cot, value_input_option="RAW")
         else:
-            log(f"  CANH BAO: header tab {ten} khong khop cau hinh.")
+            log(f"*** LOI: header tab {ten} KHONG KHOP cau hinh.")
             log(f"    tren Sheet: {hien}")
             log(f"    can co    : {cot}")
+            log("    Ghi tiep se do du lieu vao SAI COT. Dung han.")
+            log(f"    Cach sua: doi ten tab '{ten}' thanh '{ten}_cu' (hoac xoa),")
+            log("    roi chay lai. Script se tu tao tab moi dung cau truc.")
+            sys.exit(1)
     return ws
 
 
